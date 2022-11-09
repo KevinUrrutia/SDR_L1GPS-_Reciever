@@ -1,34 +1,40 @@
+//include boost libraries
 #include <boost/format.hpp>
 #include <boost/program_options.hpp>
 #include <boost/iostreams/device/file_descriptor.hpp>
 #include <boost/iostreams/stream.hpp>
+
+//include standard libraries
+#include <experimental/filesystem>
 #include <algorithm>
 #include <string>
 #include <iostream>
 #include <vector>
 #include <fstream>
 #include <sstream>
-#include <experimental/filesystem>
 #include <stdio.h>
 #include <fcntl.h>
 #include <bitset>
 
+//define namesapces
 namespace io = boost::iostreams;
 namespace po = boost::program_options;
 
+
+//configuration struct
 typedef struct {
   std::string clock_source, time_source, antenna, args, config_file, output_file;
   std::string type, subdev, wirefmt, signal_type, channel;
   size_t total_num_samps, spb;
-  int duration, gain;
-  double freq, rate, lo_offset, bw, setup_time;
+  int gain;
+  double duration, freq, rate, lo_offset, bw, setup_time;
   bool bw_summary, stats, null, enable_size_map, continue_on_bad_packet, int_n, auto_gain_tuner;
 } Settings;
 
 void parse_config(Settings* conf_setting) {
   std::vector<std::string> args;
 
-  std::cout << conf_setting->config_file << std::endl;
+  //read in the configuration file
   int fdr = open(conf_setting->config_file.c_str(), O_RDONLY);
   if(fdr >= 0) {
     io::file_descriptor_source fdDevice(fdr, io::file_descriptor_flags::close_handle);
@@ -45,10 +51,7 @@ void parse_config(Settings* conf_setting) {
   auto it = find(args.begin(), args.end(), ""); //Delete the space between config and signal type
   args.erase(it);
 
-  // for (unsigned i = 0; i < args.size(); ++i) {
-  //   std::cout << args.at(i) << std::endl;
-  // }
-
+  //assign configuration elements to array spaces
   for (unsigned char i = 0; i < args.size(); ++i) {
     size_t found = args.at(i).find('[');
     if(found != std::string::npos) {
@@ -60,22 +63,15 @@ void parse_config(Settings* conf_setting) {
     }
   }
 
-  // for (unsigned i = 0; i < args.size(); ++i) {
-  //   std::cout << args.at(i) << std::endl;
-  // }
-
   conf_setting->clock_source = args.at(1);
   conf_setting->time_source = args.at(2);
   conf_setting->duration = std::stod(args.at(3));
-  conf_setting->signal_type = args.at(4);
-  conf_setting->freq = std::stof(args.at(5));
-  conf_setting->rate = std::stof(args.at(6));
-  conf_setting->channel = args.at(7);
-  conf_setting->antenna = args.at(8);
-
-  // if(!conf_setting->auto_gain_tuner) {
-  //   conf_setting->gain = std::stod(args.at(9));
-  // }
+  conf_setting->gain = std::stoi(args.at(4));
+  conf_setting->signal_type = args.at(5);
+  conf_setting->freq = std::stod(args.at(6));
+  conf_setting->rate = std::stod(args.at(7));
+  conf_setting->channel = args.at(8);
+  conf_setting->antenna = args.at(9);
 }
 
 void parse_command_line(int argc, char* argv[], Settings* conf_setting) {
@@ -130,25 +126,3 @@ void parse_command_line(int argc, char* argv[], Settings* conf_setting) {
   conf_setting->int_n                  = vm.count("int-n") > 0;
   conf_setting->auto_gain_tuner        = vm.count("auto_gain_tuner") > 0;
 }
-
-// int main(int argc, char* argv[]) {
-//   std::string conf_file = "config.ini";
-//   Settings conf_setting;
-//
-//   parse_command_line(argc, argv, &conf_setting);
-//   parse_config(&conf_setting);
-//
-//   std::cout << "Output File..." << conf_setting.output_file << std::endl;
-//   std::cout << "Config File..." << conf_setting.config_file << std::endl;
-//   std::cout << "Clock Source..." << conf_setting.clock_source << std::endl;
-//   std::cout << "Time Source..." << conf_setting.time_source << std::endl;
-//   std::cout << "Duration..." << conf_setting.duration << std::endl;
-//   std::cout << "Gain..." << conf_setting.gain << std::endl;
-//   std::cout << "Freq..." << conf_setting.freq << std::endl;
-//   std::cout << "Rate..." << conf_setting.rate << std::endl;
-//   std::cout << "Channel..." << conf_setting.channel << std::endl;
-//   std::cout << "Antenna..." << conf_setting.antenna << std::endl;
-//   std::cout << "Signal Type..."  << conf_setting.signal_type << std::endl;
-//
-//   return 0;
-// }

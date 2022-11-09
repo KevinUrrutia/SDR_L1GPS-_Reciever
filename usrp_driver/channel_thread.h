@@ -10,7 +10,7 @@ int BUFF_SIZE = 60e6;
 class Channel_thread {
   ItemStore sampsIQ{BUFF_SIZE};
   bool done_producing = false;
-  bool open_for_buisness = false;
+  bool open_for_business = false;
   std::mutex m;
   std::condition_variable cv;
 
