@@ -9,7 +9,7 @@ del_chip = 3/217; % sampling interval in chips
 delt = del_chip * Tc; % sampling interval in seconds
 fdmin = -6000; %minimum Doppler Frequency to search
 fdmax = 6000; %maximum Doppler Frequency to search
-deltafd = 1000; %doppler resolution to search
+deltafd = 500; %doppler resolution to search
 
 %---Generate PRN code bank
 PRN = createPRNBank();
@@ -34,12 +34,13 @@ startTimeVec = 0:length(C{1})-1;
 [Dopplerm, timem] = meshgrid(fdVec, startTimeVec/fsamp);
 
 %--calculate N0 (noise denisity), can done by doing the autocorrelation with an unusused C/A code
-[N0, SNk2] = calcN0(fdmax, fdmin, deltafd, Ns, fsamp, C{34});
+[N0, SNk2] = calcN0(fdmax, fdmin, deltafd, Ns, fsamp, C{34}, Xp);
 display("Calculated N0: " + N0);
 
-%---PRN Search
-SK2 = acq_svid(fdmax, fdmin, Ns, deltafd, fsamp, C); 
 
-%---Plot PRN
-[C_N0, fd_hat, ts_hat] = PRN_plot(SK2, Tc, fsamp, fdVec, Dopplerm, timem);
+%--PRN search
+SK2 = acq_svid(fdmax, fdmin, Ns, deltafd, fsamp, C, Xp);
+
+%--Plot PRN
+[ts_hat, fd_hat, C_N0] = plotPRN(SK2, Tc, fsamp, N0, startTimeVec, fdVec, Dopplerm, timem);
 

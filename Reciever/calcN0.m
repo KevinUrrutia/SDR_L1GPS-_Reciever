@@ -1,10 +1,11 @@
-function [N0, SNk2] = calcN0(fdmax, fdmin, deltafd, Ns, f_samp, C)
+function [N0, SNk2] = calcN0(fdmax, fdmin, deltafd, Ns, f_samp, C, Xp)
     %input -> fdmax -> maximum doppler
     %         fdmin -> minimum doppler
     %         deltafd -> difference between doppler values
     %         Ns -> code length
     %         f_samp -> sampling frequency
     %         C     -> oversampled PRN
+    %         Xp actual data
     %
     %output -> N0 -> noise density
     %          SNk2-> power spectra for each satellite
@@ -18,7 +19,7 @@ function [N0, SNk2] = calcN0(fdmax, fdmin, deltafd, Ns, f_samp, C)
             C_hat = circshift(C', ts);
             [R, ~] = ccorr(C_hat, X_hat);
             i = i + 1;
-            SNk2(i) = norm(R'*X_hat')^2;
+            SNk2(i) = norm(R'*Xp')^2;
         end
     end
 

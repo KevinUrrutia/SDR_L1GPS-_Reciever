@@ -17,9 +17,9 @@ Ns = round(Nr*Np/delChip);    % Number of samples of the sequence
 % rand ---- Sequence derived from Matlab randn function
 % pi ------ Sequence derived from the digits of pi
 % mseq ---- Maximal-length sequence with n = nStages
-codeType = 'gold';
+codeType = 'mseq';
 
-%----- Generate codes
+%----- Generate codesn
 X1 = zeros(Np,1);
 X2 = zeros(Np,1);
 if(strcmp(codeType,'rand'))
@@ -58,7 +58,7 @@ else
 end
 
 %----- Compute the sequence autocorrelation
-[Rseq1,iiVecSeq] = corr(X1,X1);
+[Rseq1,iiVecSeq] = ccorr(X1,X1);
 [Rseq2,iiVecSeq] = ccorr(X2,X2);
 
 %----- Compute the sequence crosscorrelation
