@@ -18,7 +18,7 @@ SVn = [1 2 3 5 6 7 10 12 13 29 34]; %satellites to search
 N = floor(fsamp * (T_sub * 100)); %determine how much data to load in total, in this case 60s
 
 %---load in data
-load('mystery_data_file.mat');
+load('/home/kevinurrutia/mystery_data_file.mat');
 X = Y(1:N);
 
 %--Plot power spectrum
