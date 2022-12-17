@@ -1,4 +1,4 @@
-function settings = initSettings(fname_IQ, num_skip, samp_f, IF)
+function settings = initSettings(fname_IQ)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%Initializes and saves user settings. Settings are edited inside the
 %%function, these are masked from the user. The only settting they have
@@ -27,14 +27,15 @@ settings.numChannels = 12;
 %save sampling rate
 settings.samp_f = samp_f;
 
-%Number of seconds to skip
-settings.skipNumberBytes = num_skip * settings.samp_f * 4; %there are 4 bytes per sample
+%Number of bytes to skip
+settings.skipNumberBytes = 0;
 
 %Data Type used to store one sample
 settings.dataType = 'schar';
 
 %Intermediate, sampling and code Frequencies
-settings.IF = IF;
+settings.IF            = 20e3;    % [Hz]
+settings.samplingFreq  = 18e6;    % [Hz]
 settings.codeFreqBasis = 1.023e6; %[Hz]
 
 %number of code chips in a period
