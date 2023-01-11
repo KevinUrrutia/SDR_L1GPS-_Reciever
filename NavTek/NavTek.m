@@ -262,6 +262,16 @@ classdef NavTek
     
             end % for channelNr = channelList
         end
+
+        function CNo = CNoVSM(I, Q, T) 
+            Z = I.^2 + Q.^2;
+            Zm = mean(Z);
+            Zv = var(Z);
+
+            Pavg = sqrt(Zm^2 - Zv);
+            Nv = 0.5*(Zm - Pavg);
+            CNo = 10 * log10(abs((1/T)*Pavg/(2*Nv)));
+        end
     end
 
     methods
@@ -755,7 +765,7 @@ classdef NavTek
                         %% CNo calculation --------------------------------------
                         if (rem(loopCnt,obj.CN0_VSMinterval)==0)
                             vsmCnt=vsmCnt+1;
-                            CNoValue=CNoVSM(tracking_results(channelNr).I_P(loopCnt-obj.CN0_VSMinterval+1:loopCnt),...
+                            CNoValue=obj.CNoVSM(tracking_results(channelNr).I_P(loopCnt-obj.CN0_VSMinterval+1:loopCnt),...
                                 tracking_results(channelNr).Q_P(loopCnt-obj.CN0_VSMinterval+1:loopCnt),obj.CN0_accTime);
                             tracking_results(channelNr).CNo.VSMValue(vsmCnt)=CNoValue;
                             tracking_results(channelNr).CNo.VSMIndex(vsmCnt)=loopCnt;
