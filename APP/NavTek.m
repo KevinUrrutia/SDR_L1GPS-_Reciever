@@ -39,7 +39,7 @@ classdef NavTek
     end
 
     methods
-        function obj = NavTek(gui)
+        function obj = NavTek()
 %             prompt = "Enter full IQ file path\n";
 %             file_loc = input(prompt, 's');
             obj.fnameIQ = gui.iq_file;
@@ -123,8 +123,8 @@ classdef NavTek
             end
         end
 
-        function postProcess(obj,gui)
-            obj.probeData(gui);
+        function postProcess(obj)
+            obj.probeData();
             % Acquisition Function
         end
     end
