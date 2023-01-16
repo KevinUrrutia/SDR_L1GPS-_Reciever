@@ -272,6 +272,57 @@ classdef NavTek
             Nv = 0.5*(Zm - Pavg);
             CNo = 10 * log10(abs((1/T)*Pavg/(2*Nv)));
         end
+
+        function status = navPartyChk(ndat)
+            if (ndat(2) ~= 1)
+                ndat(3:26)= -1 .* ndat(3:26);  % Also could just negate
+            end
+            
+            %--- Calculate 6 parity bits ----------------------------------------------
+            % The elements of the ndat array correspond to the bits showed in the table
+            % 20-XIV (ICD-200C document) in the following way:
+            % The first element in the ndat is the D29* bit and the second - D30*.
+            % The elements 3 - 26 are bits d1-d24 in the table.
+            % The elements 27 - 32 in the ndat array are the received bits D25-D30.
+            % The array "parity" contains the computed D25-D30 (parity) bits.
+            
+            parity(1) = ndat(1)  * ndat(3)  * ndat(4)  * ndat(5)  * ndat(7)  * ...
+                        ndat(8)  * ndat(12) * ndat(13) * ndat(14) * ndat(15) * ...
+                        ndat(16) * ndat(19) * ndat(20) * ndat(22) * ndat(25);
+            
+            parity(2) = ndat(2)  * ndat(4)  * ndat(5)  * ndat(6)  * ndat(8)  * ...
+                        ndat(9)  * ndat(13) * ndat(14) * ndat(15) * ndat(16) * ...
+                        ndat(17) * ndat(20) * ndat(21) * ndat(23) * ndat(26);
+            
+            parity(3) = ndat(1)  * ndat(3)  * ndat(5)  * ndat(6)  * ndat(7)  * ...
+                        ndat(9)  * ndat(10) * ndat(14) * ndat(15) * ndat(16) * ...
+                        ndat(17) * ndat(18) * ndat(21) * ndat(22) * ndat(24);
+            
+            parity(4) = ndat(2)  * ndat(4)  * ndat(6)  * ndat(7)  * ndat(8)  * ...
+                        ndat(10) * ndat(11) * ndat(15) * ndat(16) * ndat(17) * ...
+                        ndat(18) * ndat(19) * ndat(22) * ndat(23) * ndat(25);
+            
+            parity(5) = ndat(2)  * ndat(3)  * ndat(5)  * ndat(7)  * ndat(8)  * ...
+                        ndat(9)  * ndat(11) * ndat(12) * ndat(16) * ndat(17) * ...
+                        ndat(18) * ndat(19) * ndat(20) * ndat(23) * ndat(24) * ...
+                        ndat(26);
+            
+            parity(6) = ndat(1)  * ndat(5)  * ndat(7)  * ndat(8)  * ndat(10) * ...
+                        ndat(11) * ndat(12) * ndat(13) * ndat(15) * ndat(17) * ...
+                        ndat(21) * ndat(24) * ndat(25) * ndat(26);
+            
+            %--- Compare if the received parity is equal the calculated parity --------
+            if ((sum(parity == ndat(27:32))) == 6)
+                
+                % Parity is OK. Function output is -1 or 1 depending if the data bits
+                % must be inverted or not. The "ndat(2)" is D30* bit - the last  bit of
+                % previous subframe. 
+                status = -1 * ndat(2);
+            else
+                % Parity failure
+                status = 0;
+            end
+        end
     end
 
     methods
@@ -779,6 +830,150 @@ classdef NavTek
             end
         end
 
+        function [nav_sol, ephem] = compute_position(obj, tracking_results)
+            %Warning a minimum of 30s is needed to calculate position,
+            %considering that at least 3 subframes are needed to find the
+            %satellites coordinates, each subframe is 6s long 
+
+            if (obj.msToProcess < 36000)
+                error("Record is too short to process, Need at least 36s to compute navigation solution");
+            end
+
+            %pre allocate space for nagiation results
+            %this process needs to happen for each satellite being tracked
+            %Preable of each subframe
+            subFrameStart = inf(1, obj.numChannels);
+
+            %Time of week (GPS) Time being decoded from the satellites
+            TOW = inf(1, obj.numChannels);
+
+            %create a list of satellites that actually tracked to the end
+            trackedChan = find([tracking_results.status] ~= '-');
+
+            % Decode the ephemeris from the subframes
+            for channelNr = trackedChan
+                %get the current PRN number
+                PRN = tracking_results(channelNr).PRN;
+                fprintf("Now decoding PRN %02d navigation message.......\n", PRN);
+
+                %Decode subframes to get ephemeris data
+                [ephem(PRN), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P);
+            end
+
+        end 
+
+        function [eph, subframeStart, TOW] = decode(obj, I_P) 
+            %create ephermeris data structure 
+            eph.idValid(1:5) = zeros(1, 5); %valid subframe
+            eph.PRN = [];
+            eph.week = [];
+            eph.TOW = [];
+
+            %subframe 1 elements. contains WN, clock corrections, health
+            %and accuracy
+            eph.weekNumber = [];
+            eph.accuracy = [];
+            eph.health = [];
+            eph.T_GD = [];
+            eph.IODC = [];
+            eph.t_oc = [];
+            eph.a_f2 = [];
+            eph.a_f1 = [];
+            eph.a_f0 = [];
+
+            %subframe 2. contains first part of ephemeris parameters
+            eph.IODE_2 = []; %Issue of data (ephemeris)
+            eph.C_rs = []; % Amplitude of sine harmonic correction term to the orbit radius
+            eph.deltan = []; %mean motion difference from computed value
+            eph.M_0 = []; %Mean anomoly
+            eph.C_uc = []; %Amplitude of cosine harmonic correction term to the argument of latitiude
+            eph.e = []; %ecentricity
+            eph.C_us = []; %Amplitude of sine harmonic correction term to the argument of latitude
+            eph.t_oe = []; %reference time ephemeris
+
+            %subframe 3. contains second part of ephemeris parameters
+            eph.C_ic = []; %Amplitude of cosine harmonic correction term to the angle of inclination
+            eph.omega_0 = []; %Longitude of Ascending node of orbit plane at weekly epoch
+            eph.C_is = []; %Amplitude of sine harmonic correction term to the angle of inclination
+            eph.i_0 = []; %Inclination angle at reference time
+            eph.C_rc = []; %Amplitude of cosine harmonic correction term to the orbit radius
+            eph.omega = []; %argument of perigee
+            eph.omega_dot = []; %rate of rigt ascension
+            eph.IODE_3 = []; %Issue of data (ephemeris)
+            eph.IDOT = []; %Rate of inclination angle
+
+            subframeStart = inf;
+            TOW = inf;
+
+            preamble = [1 -1 -1 -1 1 -1 1 1];
+            preamble_ms = kron(preamble, ones(1, 20));
+
+            %just in case we want to start searching later in the tracking
+            %loops
+            searchStartOffset = 0;
+            %grab valid bits in I_P
+            bits = I_P(1 + searchStartOffset : end);
+            
+            %create vector 1 and -1 to match the preamble
+            bits(bits > 0)  =  1;
+            bits(bits <= 0) = -1;
+
+            %correlate the tracking results with preamble to find instance
+            %of it in the bits 
+            clear index
+            clear index2
+            tlmXcorrResult = xcorr(bits, preamble_ms);
+            xcorrLength = (length(tlmXcorrResult) +  1) /2;
+
+            %get the index where the preamble starts
+            index = find(...
+                abs(tlmXcorrResult(xcorrLength : xcorrLength * 2 - 1)) > 153)' + ...
+                searchStartOffset;
+            %throw out indecies that might cause boundary conditions
+            index = index((index>40 & index<obj.msToProcess - (20 * 60 -1)) == 1);
+
+            for i = 1:size(index, 1)
+                %find the differences in time for the preable detection if
+                %it is approx 6s worth then we can move on to further
+                %checks
+                index2 = index - index(i);
+                if(~isempty(find(index2 == 6000, 1)))
+                    %re read bit values for preamble verification 
+                    %preamble is verified by checking the parity of the
+                    %first two words in the subframe. In total 62 bits
+                    %need to be read:
+                    % 2 bits from the previous subframe are needed for
+                    % parity check
+                    %60 bits for the first two 60bit words (TLM and HOW words)
+                    %index is to the start of the TLM word
+                    bits = I_P(index(i)-40 : index(i) + 20 * 60 -1)';
+
+                    %combine 20 values of each bit
+                    bits = reshape(bits, 20, (size(bits, 1) / 20));
+                    bits = sum(bits);
+
+                    %create vector 1 and -1 to match the preamble
+                    bits(bits > 0) = 1;
+                    bits(bits <= 0) = -1;
+
+                    if (obj.navPartyChk(bits(1:32)) ~= 0) && ...
+                            (obj.navPartyChk(bits(31:62)) ~= 0)
+                        %if the parity check is fine then save the pramble
+                        %starting positing for this channel
+                        subframeStart = index(i);
+                        break;
+                    end
+                end   
+            end
+
+            %Exclude the channel if there is no preamble
+            if subframeStart == inf
+                disp('Could not find valid preambles in channel! ');
+                return
+            end
+        end
+
+
         function postProcess(obj)
             %% probe data for validity
             obj.probeData();
@@ -820,6 +1015,12 @@ classdef NavTek
                 %% Tracking
                 track_results = obj.tracking(fid, channel);
                 obj.plotTracking(1:obj.numChannels, track_results, obj.msToProcess);
+                disp("Enter to continue to naviagtion solution");
+                pause;
+                close all;
+
+                %% Position solution
+
             end
         end
     end
