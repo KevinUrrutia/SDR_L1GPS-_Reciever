@@ -1,3 +1,4 @@
-nav = test_check;
-nav.plot_test();
-nav.x
+
+clear; close all; clc;
+nav = NavTek();
+nav.postProcess();
