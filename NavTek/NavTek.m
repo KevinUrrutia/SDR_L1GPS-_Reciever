@@ -323,6 +323,22 @@ classdef NavTek
                 status = 0;
             end
         end
+
+        function integer = twosComp2dec(num)
+            integer = bin2dec(num);
+            if(num(1) == 1)
+                integer = integer - 2^size(num, 2);
+            end
+        end
+
+        function result = invert(data)
+            dataLength = length(data);
+            temp(1:dataLength) = '1';
+
+            invertMask = bin2dec(char(temp));
+
+            result = dec2bin(bitxor(bin2dec(data), invertMask), dataLength);
+        end
     end
 
     methods
@@ -857,15 +873,15 @@ classdef NavTek
                 fprintf("Now decoding PRN %02d navigation message.......\n", PRN);
 
                 %Decode subframes to get ephemeris data
-                [ephem(PRN), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P);
+                [ephem(channelNr), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P, PRN);
             end
 
         end 
 
-        function [eph, subframeStart, TOW] = decode(obj, I_P) 
+        function [eph, subframeStart, TOW] = decode(obj, I_P, PRN) 
             %create ephermeris data structure 
             eph.idValid(1:5) = zeros(1, 5); %valid subframe
-            eph.PRN = [];
+            eph.PRN = PRN;
             eph.week = [];
             eph.TOW = [];
 
@@ -888,6 +904,7 @@ classdef NavTek
             eph.M_0 = []; %Mean anomoly
             eph.C_uc = []; %Amplitude of cosine harmonic correction term to the argument of latitiude
             eph.e = []; %ecentricity
+            eph.sqrtA = []; %
             eph.C_us = []; %Amplitude of sine harmonic correction term to the argument of latitude
             eph.t_oe = []; %reference time ephemeris
 
@@ -971,6 +988,82 @@ classdef NavTek
                 disp('Could not find valid preambles in channel! ');
                 return
             end
+
+            %copy 5-subframes long
+            navBits = I_P(subframeStart - 20 : subframeStart + (1500 * 20) -1)';
+            %reshape into 20 different values of bits
+            navBits = reshape(navBits, 20, (size(navBits, 1) / 20));
+            navBits = sum(navBits);
+
+            navBits = (navBits > 0);
+
+            navBits = dec2bin(navBits);
+
+
+            [eph, TOW] = obj.ephermeris(navBits(2:1501)', navBits(1), eph, TOW);
+        end
+
+        function [eph, TOW] = ephermeris(obj, bits, D30star, eph, TOW) 
+            % Pi used in the GPS coordinate system
+            gpsPi = 3.1415926535898; 
+
+            %decode all five subframes
+            for i = 1:5
+                %grab a single subframe out of all of the elements
+                %--- "Cut" one sub-frame's bits ---------------------------------------
+                subframe = bits(300*(i-1)+1 : 300*i);
+
+                for j = 1:10
+                    if D30star == '1'
+                        subframe(30*(j-1)+1 : 30*j) = obj.invert(subframe(30*(j-1)+1 : 30*j));
+                    end
+                end
+
+                %decode subframe id
+                subframeID = bin2dec(subframe(50:52));
+                
+                switch subframeID
+                    case 1
+                        eph.weekNumber = bin2dec(subframe(61:70)) + 1024;
+                        eph.accuracy = bin2dec(subframe(73:76));
+                        eph.health = bin2dec(subframe(77:82));
+                        eph.T_GD = obj.twosComp2dec(subframe(197:204)) * 2^(-31);
+                        eph.IODC = bin2dec([subframe(83:84) subframe(197:204)]);
+                        eph.t_oc = bin2dec(subframe(219:234)) * 2^(4);
+                        eph.a_f2 = obj.twosComp2dec(subframe(241:248)) * 2^(-55);
+                        eph.a_f1 = obj.twosComp2dec(subframe(249:264)) * 2^(-43);
+                        eph.a_f0 = obj.twosComp2dec(subframe(271:292)) * 2^(-31);
+                        eph.idValid(1) = 1;
+                    case 2
+                        eph.IODE_2 = bin2dec(subframe(61:68));
+                        eph.C_rs = obj.twosComp2dec(subframe(69:84)) * 2^(-5);
+                        eph.deltan = obj.twosComp2dec(subframe(91:106)) * 2^(-43) * gpsPi;
+                        eph.M_0 = obj.twosComp2dec([subframe(107:114) subframe(121:144)]) * 2^(-31) * gpsPi;
+                        eph.C_uc = obj.twosComp2dec(subframe(151:166)) * 2^(-29);
+                        eph.e = bin2dec([subframe(167:174) subframe(181:204)]) * 2^(-33);
+                        eph.C_us = obj.twosComp2dec(subframe(211:226)) * 2^(-29);
+                        eph.sqrtA = bin2dec([subframe(227:234) subframe(241:264)]) * 2^(-19);
+                        eph.t_oe = bin2dec(subframe(271:286)) * 2^(-19);
+                        eph.idValid(1) = 2;
+                    case 3
+                        eph.C_ic = obj.twosComp2dec(subframe(61:76)) * 2^(-29);
+                        eph.omega_0 = obj.twosComp2dec([subframe(77:84) subframe(91:114)]) * 2^(-31) * gpsPi;
+                        eph.C_is = obj.twosComp2dec(subframe(121:136)) * 2^(-29);
+                        eph.i_0 = obj.twosComp2dec([subframe(137:144) subframe(151:174)]) * 2^(-31) * gpsPi;
+                        eph.C_rc = obj.twosComp2dec(subframe(181:196)) * 2^(-5);
+                        eph.omega = obj.twosComp2dec([subframe(197:204) subframe(211:234)]) * 2^(-31) * gpsPi;
+                        eph.omega_dot = obj.twosComp2dec(subframe(241:264)) * 2^(-43) * gpsPi;
+                        eph.IODE_3 = bin2dec(subframe(271:278));
+                        eph.IDOT = obj.twosComp2dec(subframe(279:292)) * 2^(-43) * gpsPi;
+                        eph.idValid(1) = 3;
+                    case 4
+                        %Almanac amd ionospheric model, UTC parameters
+                    case 5
+                        %SV almanac and health
+                end
+            end
+            TOW = bin2dec(subframe(31:47)) * 6 - 30;
+            eph.TOW = TOW;
         end
 
 
