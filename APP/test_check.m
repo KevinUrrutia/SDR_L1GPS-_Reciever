@@ -1,4 +1,4 @@
-classdef test_check
+classdef test_check < handle
 
     properties
         x = 0;
@@ -8,6 +8,7 @@ classdef test_check
 
     methods 
         function obj = plot_test(obj)
+            disp('check_point')
             obj.x = 0:pi/100:2*pi;
             obj.y = sin(obj.x);
 %             plot(obj.x,obj.y)
