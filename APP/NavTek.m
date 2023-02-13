@@ -415,7 +415,7 @@ classdef NavTek
             end
         end
 
-        function acq_results = aquisition(obj, data)
+        function [acq_results, acq_results_visual, PRN_visual] = aquisition(obj, data, acq_results_visual, PRN_visual)
             %% Initialization
             %==Variable initialization for course aquisition==============
             %number of samples per chipping sequence
@@ -456,7 +456,10 @@ classdef NavTek
             sigPower = sqrt(var(data(1:samplesPerCode)) * samplesPerCode);
 
             %Preform search for all listed satellite numbers....
-            fprintf('(');
+%             fprintf('(');
+            f = waitbar(0,'Acquisition Starting...');
+            pause(.5)
+            i = 1;
             for PRN = obj.SVn
                 %% Course Aquisition
                 %generate PRN sqequences
@@ -497,13 +500,13 @@ classdef NavTek
                     end
                 end 
 
-                S = mesh(results);
-                grid on;
-                xlabel('f_d bin [Hz]')
-                ylabel('t_s bin [sec]')
-                title(strcat(['C/A for PRN ' int2str(PRN)]))
-                pause(1);
-                clf(S);
+%                 S = mesh(results);
+%                 grid on;
+%                 xlabel('f_d bin [Hz]')
+%                 ylabel('t_s bin [sec]')
+%                 title(strcat(['C/A for PRN ' int2str(PRN)]))
+%                 pause(1);
+%                 clf(S);
 
                 %% Find Correlation peaks for CA
                 %find correlation peaks for CA and teh carrier frequency
@@ -516,9 +519,21 @@ classdef NavTek
                 %if result is above the threshold then there is a signal
                 %present 
                 %% Fine carrier frequency search
+                
                 if(acq_results.peakMetric(PRN) > obj.acqThresh)
+                    acq_results_visual{i} = results;
+                    PRN_visual{i} = PRN;
+                    i = i + 1;
                     %indicate PRN number of detected signal
-                    fprintf('%02d ', PRN);
+                    waitbar(0, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(3/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(6/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(10/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+%                     fprintf('%02d ', PRN);
 
                     %Prepare 20ms of code, carrier and input signals
                     %CA code with 10230 chips
@@ -572,10 +587,21 @@ classdef NavTek
                     end
                 else
                     %--- No signal with this PRN --------------------------------------
-                    fprintf('. ');
+                    waitbar(0, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(3/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(6/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(10/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+%                     fprintf('. ');
                 end
             end
-            fprintf(')\n');
+            waitbar(1,f,'Opening Acquisition Results...');
+            close(f)
+            fprintf('\n');
+%             fprintf(')\n');
         end
 
         function channel = sortAcquisition(obj, acqResults)
