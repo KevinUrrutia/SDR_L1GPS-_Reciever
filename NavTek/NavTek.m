@@ -51,8 +51,12 @@ classdef NavTek
         %Accumulation interval for computing VSM C/N0
         CN0_VSMinterval = 40;
 
+        %% navigation solution settings
+        navSolPeriod = 500;
+
         %% Constants
         c = 299792458;
+        startOffset = 68.802; %[ms] Initial sign. travel time
     end
 
     methods (Static)
@@ -874,9 +878,113 @@ classdef NavTek
 
                 %Decode subframes to get ephemeris data
                 [ephem(channelNr), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P, PRN);
+
+
+                %Exclude a satellite if it does not have the necessary
+                %navigation data
+
+                if(isempty(ephem(channelNr).IODC) || isempty(ephem(channelNr).IODE_2) || isempty(ephem(channelNr).IODE_3) || (ephem(channelNr).health ~=0))
+                    %Exclude channel from the active list
+                    trackedChan = setdiff(trackedChan, channelNr);
+                    fprintf(' Ephemeris decoding fails for PRN %02d !\n', PRN);
+                else
+                    fprintf(' Three requistite messages for PRN %02d all decoded!\n', PRN);
+                end
             end
 
+         %check if the number of satellites is still above 4
+         if(isempty(trackedChan) || (size(trackedChan, 2) < 4))
+             disp('Too few satellites with ephemeris data for position calculations Exiting!');
+             nav_sol = [];
+             ephem = [];
+         end
+
+        %set the measurement-time point and step
+        %find start and end measurement point locations in IF signal stream
+        %with available measurements
+        sampleStart = zeros(1, obj.numChannels);
+        sampleEnd = inf(1, obj.numChannels);
+
+        for channelNr = trackedChan
+            sampleStart(channelNr) = tracking_results(channelNr).absoluteSample(subFrameStart(channelNr));
+            sampleEnd(channelNr) = tracking_results(channelNr).absoluteSample(end);
+        end
+
+        %second terms is to make space to avoid index exceeds matrix
+        %dimensions
+        sampleStart = max(sampleStart) + 1;
+        sampleEnd = sampleEnd(isfinite(sampleEnd));
+        sampleEnd = max(sampleEnd) + 1;
+
+        %measurement step in units of IF samples
+        measSampleStep = fix(obj.fsamp * obj.navSolPeriod/1000);
+
+        %number of measurement points from measurement start to end
+        measNrSum = fix((sampleEnd - sampleStart)/measSampleStep);
+
+        %initialization 
+        %set the local time to ind for the first satellite calculation of
+        %reciever positon. After first fix local time will be updated by
+        %measurement sample step
+        localTime = inf;
+
+        fprintf("Positions are being computed. Please wait....\n");
+        for currMeasNr = 1:measNrSum
+            %positon index of current measurement time in IF signal stream
+            currMeasSample = sampleStart + measSampleStep*(currMeasNr - 1);
+            %find psuedo-ranges
+            [nav_sol.rawP(:, currMeasNr), transmitTime, localTime] = obj.calcPsuedorange(tracking_results, subFrameStart, TOW, currMeasSample, localTime, trackedChan);
+
+            %save transmitTime 
+            nav_sol.transmitTime(trackedChan, currMeasNr) = transmitTime(trackedChan);
+
+            %Find satellites positions and clock corrections
+
+        end
+            
         end 
+
+        function [psuedoranges, transmitTime, localTime] = calcPsuedorange(obj, trackResults, subFrameStart, TOW, currMeasSample, localTime, channelList)
+            transmitTime = inf(1, obj.numChannels);
+
+            %for all channels in the list 
+            for channelNr = channelList
+                %find index I_P stream whose integration contains current
+                %measurment point location
+                for index = 1:length(trackResults(channelNr).absoluteSample)
+                    if(trackResults(channelNr).absoluteSample(index) > currMeasSample)
+                        break;
+                    end
+                end
+                index = index - 1;
+
+                %update the phase step based on code freq and sampling
+                %frequency
+                codePhaseStep = trackResults(channelNr).codeFreq(index) / obj.fsamp;
+
+                %code phase from start of PRN code to current measurement
+                %sample location
+                codePhase = trackResults(channelNr).remCodePhase(index) + codePhaseStep*(currMeasSample - trackResults(channelNr).absoluteSample(index));
+
+                %transmitting time (in units of s) at current measurement
+                %sample locartion codephase/obj.codeLength: fraction part
+                %of PRN code index-subframeStart(channelNr): integer
+                %number of PRN code
+
+                transmitTime(channelNr) = (codePhase/obj.codeLength + index - subFrameStart(channelNr)) * obj.codeLength/obj.fchip + TOW(channelNr);
+            end
+
+            %at first time of fix, local time is initialized by transmit
+            %time and obj.startoffset
+
+            if(localTime == inf)
+                maxTime = max(transmitTime(channelList));
+                localTime = maxTime + obj.startOffset/1000;
+            end
+
+            %convert the travel time to distance 
+            psuedoranges = (localTime - transmitTime)*obj.c;
+        end
 
         function [eph, subframeStart, TOW] = decode(obj, I_P, PRN) 
             %create ephermeris data structure 
@@ -1112,7 +1220,10 @@ classdef NavTek
                 pause;
                 close all;
 
+                fclose(fid);
+
                 %% Position solution
+                [navResults, ephem] = compute_position(track_results);
 
             end
         end
