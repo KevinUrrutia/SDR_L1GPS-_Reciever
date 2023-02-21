@@ -1,4 +1,3 @@
-
 clear; close all; clc;
-nav = NavTek();
+nav = NavTek;
 nav.postProcess();

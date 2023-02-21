@@ -1,4 +1,4 @@
-classdef NavTek < handle
+classdef NavTek
 
     properties
         %% Post processing settings
@@ -272,23 +272,74 @@ classdef NavTek < handle
             Nv = 0.5*(Zm - Pavg);
             CNo = 10 * log10(abs((1/T)*Pavg/(2*Nv)));
         end
+
+        function status = navPartyChk(ndat)
+            if (ndat(2) ~= 1)
+                ndat(3:26)= -1 .* ndat(3:26);  % Also could just negate
+            end
+            
+            %--- Calculate 6 parity bits ----------------------------------------------
+            % The elements of the ndat array correspond to the bits showed in the table
+            % 20-XIV (ICD-200C document) in the following way:
+            % The first element in the ndat is the D29* bit and the second - D30*.
+            % The elements 3 - 26 are bits d1-d24 in the table.
+            % The elements 27 - 32 in the ndat array are the received bits D25-D30.
+            % The array "parity" contains the computed D25-D30 (parity) bits.
+            
+            parity(1) = ndat(1)  * ndat(3)  * ndat(4)  * ndat(5)  * ndat(7)  * ...
+                        ndat(8)  * ndat(12) * ndat(13) * ndat(14) * ndat(15) * ...
+                        ndat(16) * ndat(19) * ndat(20) * ndat(22) * ndat(25);
+            
+            parity(2) = ndat(2)  * ndat(4)  * ndat(5)  * ndat(6)  * ndat(8)  * ...
+                        ndat(9)  * ndat(13) * ndat(14) * ndat(15) * ndat(16) * ...
+                        ndat(17) * ndat(20) * ndat(21) * ndat(23) * ndat(26);
+            
+            parity(3) = ndat(1)  * ndat(3)  * ndat(5)  * ndat(6)  * ndat(7)  * ...
+                        ndat(9)  * ndat(10) * ndat(14) * ndat(15) * ndat(16) * ...
+                        ndat(17) * ndat(18) * ndat(21) * ndat(22) * ndat(24);
+            
+            parity(4) = ndat(2)  * ndat(4)  * ndat(6)  * ndat(7)  * ndat(8)  * ...
+                        ndat(10) * ndat(11) * ndat(15) * ndat(16) * ndat(17) * ...
+                        ndat(18) * ndat(19) * ndat(22) * ndat(23) * ndat(25);
+            
+            parity(5) = ndat(2)  * ndat(3)  * ndat(5)  * ndat(7)  * ndat(8)  * ...
+                        ndat(9)  * ndat(11) * ndat(12) * ndat(16) * ndat(17) * ...
+                        ndat(18) * ndat(19) * ndat(20) * ndat(23) * ndat(24) * ...
+                        ndat(26);
+            
+            parity(6) = ndat(1)  * ndat(5)  * ndat(7)  * ndat(8)  * ndat(10) * ...
+                        ndat(11) * ndat(12) * ndat(13) * ndat(15) * ndat(17) * ...
+                        ndat(21) * ndat(24) * ndat(25) * ndat(26);
+            
+            %--- Compare if the received parity is equal the calculated parity --------
+            if ((sum(parity == ndat(27:32))) == 6)
+                
+                % Parity is OK. Function output is -1 or 1 depending if the data bits
+                % must be inverted or not. The "ndat(2)" is D30* bit - the last  bit of
+                % previous subframe. 
+                status = -1 * ndat(2);
+            else
+                % Parity failure
+                status = 0;
+            end
+        end
     end
 
     methods
-        function obj = get_IQ(obj, iq_file)
+        function obj = NavTek
 %             prompt = "Enter full IQ file path";
 %             disp(prompt);
-%             [file, path] = uigetfile("*.bin");
+            [file, path] = uigetfile("*.bin");
 %             if isequal(file, 0)
 %                 error("Enter a valid file");
 %             else 
 %                 disp(['User selected ', fullfile(path,file)]);
 %             end
-%             
-            obj.fnameIQ = fullfile(iq_file);
+            
+            obj.fnameIQ = fullfile(path, file);
         end
         
-        function freq_plot = probeData(obj)
+        function obj = probeData(obj)
             %% Generate and plot raw data
             fid = fopen(obj.fnameIQ, 'rb');
 
@@ -314,57 +365,57 @@ classdef NavTek < handle
                 f = figure;
                 f.Position(3:4) = [1000, 1000];
 
-%                 %% Time domain plot
-%                 data=data(1:2:end) + 1i .* data(2:2:end);
-%                 subplot(3, 2, 4);
-%                 plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
-%                 real(data(1:round(sampsPerCode/2))));
-% 
-%                 axis tight;    grid on;
-%                 title ('Time domain plot (I)');
-%                 xlabel('Time (ms)'); ylabel('Amplitude');
-% 
-%                 subplot(3, 2, 3);
-%                 plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
-%                 imag(data(1:round(sampsPerCode/2))));
-% 
-%                 axis tight;    grid on;
-%                 title ('Time domain plot (Q)');
-%                 xlabel('Time (ms)'); ylabel('Amplitude');
+                %% Time domain plot
+                data=data(1:2:end) + 1i .* data(2:2:end);
+                subplot(3, 2, 4);
+                plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
+                real(data(1:round(sampsPerCode/2))));
+
+                axis tight;    grid on;
+                title ('Time domain plot (I)');
+                xlabel('Time (ms)'); ylabel('Amplitude');
+
+                subplot(3, 2, 3);
+                plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
+                imag(data(1:round(sampsPerCode/2))));
+
+                axis tight;    grid on;
+                title ('Time domain plot (Q)');
+                xlabel('Time (ms)'); ylabel('Amplitude');
 
                 %% Frequency domain plot
-%                 subplot(3,2,1:2);
+                subplot(3,2,1:2);
                 [sigspec,freqv]=pwelch(data, 32768, 2048, 32768, obj.fsamp,'twosided');
-                freq_plot = plot(([-(freqv(length(freqv)/2:-1:1));freqv(1:length(freqv)/2)])/1e6, ...
+                plot(([-(freqv(length(freqv)/2:-1:1));freqv(1:length(freqv)/2)])/1e6, ...
                 10*log10([sigspec(length(freqv)/2+1:end);
                 sigspec(1:length(freqv)/2)]));
-%                 axis tight;
-%                 grid on;
-%                 title ('Frequency domain plot');
-%                 xlabel('Frequency (MHz)'); ylabel('Magnitude');
-% 
-%                 %% Histogram
-%                 subplot(3, 2, 6);
-%                 histogram(real(data), -128:128)
-%                 dmax = max(abs(data)) + 1;
-%                 axis tight;     adata = axis;
-%                 axis([-dmax dmax adata(3) adata(4)]);
-%                 grid on;        title ('Histogram (I)');
-%                 xlabel('Bin');  ylabel('Number in bin');
-%             
-%                 subplot(3, 2, 5);
-%                 histogram(imag(data), -128:128)
-%                 dmax = max(abs(data)) + 1;
-%                 axis tight;     adata = axis;
-%                 axis([-dmax dmax adata(3) adata(4)]);
-%                 grid on;        title ('Histogram (Q)');
-%                 xlabel('Bin');  ylabel('Number in bin');
-% 
-%                 uiwait(f);
+                axis tight;
+                grid on;
+                title ('Frequency domain plot');
+                xlabel('Frequency (MHz)'); ylabel('Magnitude');
+
+                %% Histogram
+                subplot(3, 2, 6);
+                histogram(real(data), -128:128)
+                dmax = max(abs(data)) + 1;
+                axis tight;     adata = axis;
+                axis([-dmax dmax adata(3) adata(4)]);
+                grid on;        title ('Histogram (I)');
+                xlabel('Bin');  ylabel('Number in bin');
+            
+                subplot(3, 2, 5);
+                histogram(imag(data), -128:128)
+                dmax = max(abs(data)) + 1;
+                axis tight;     adata = axis;
+                axis([-dmax dmax adata(3) adata(4)]);
+                grid on;        title ('Histogram (Q)');
+                xlabel('Bin');  ylabel('Number in bin');
+
+                uiwait(f);
             end
         end
 
-        function acq_results = aquisition(obj, data)
+        function [acq_results, acq_results_visual, PRN_visual] = aquisition(obj, data, acq_results_visual, PRN_visual)
             %% Initialization
             %==Variable initialization for course aquisition==============
             %number of samples per chipping sequence
@@ -405,7 +456,10 @@ classdef NavTek < handle
             sigPower = sqrt(var(data(1:samplesPerCode)) * samplesPerCode);
 
             %Preform search for all listed satellite numbers....
-            fprintf('(');
+%             fprintf('(');
+            f = waitbar(0,'Acquisition Starting...');
+            pause(.5)
+            i = 1;
             for PRN = obj.SVn
                 %% Course Aquisition
                 %generate PRN sqequences
@@ -446,13 +500,13 @@ classdef NavTek < handle
                     end
                 end 
 
-                S = mesh(results);
-                grid on;
-                xlabel('f_d bin [Hz]')
-                ylabel('t_s bin [sec]')
-                title(strcat(['C/A for PRN ' int2str(PRN)]))
-                pause(1);
-                clf(S);
+%                 S = mesh(results);
+%                 grid on;
+%                 xlabel('f_d bin [Hz]')
+%                 ylabel('t_s bin [sec]')
+%                 title(strcat(['C/A for PRN ' int2str(PRN)]))
+%                 pause(1);
+%                 clf(S);
 
                 %% Find Correlation peaks for CA
                 %find correlation peaks for CA and teh carrier frequency
@@ -465,9 +519,21 @@ classdef NavTek < handle
                 %if result is above the threshold then there is a signal
                 %present 
                 %% Fine carrier frequency search
+                
                 if(acq_results.peakMetric(PRN) > obj.acqThresh)
+                    acq_results_visual{i} = results;
+                    PRN_visual{i} = PRN;
+                    i = i + 1;
                     %indicate PRN number of detected signal
-                    fprintf('%02d ', PRN);
+                    waitbar(0, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(3/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(6/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(10/10, f, sprintf('Signal found at Satellite %02d', PRN));
+                    pause(.5)
+%                     fprintf('%02d ', PRN);
 
                     %Prepare 20ms of code, carrier and input signals
                     %CA code with 10230 chips
@@ -521,10 +587,21 @@ classdef NavTek < handle
                     end
                 else
                     %--- No signal with this PRN --------------------------------------
-                    fprintf('. ');
+                    waitbar(0, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(3/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(6/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+                    waitbar(10/10, f, sprintf('No signal found at Satellite %02d', PRN));
+                    pause(.5)
+%                     fprintf('. ');
                 end
             end
-            fprintf(')\n');
+            waitbar(1,f,'Opening Acquisition Results...');
+            close(f)
+            fprintf('\n');
+%             fprintf(')\n');
         end
 
         function channel = sortAcquisition(obj, acqResults)
@@ -779,50 +856,198 @@ classdef NavTek < handle
             end
         end
 
-        function postProcess(obj, iq_file)
-            %% probe data for validity
-            obj.fnameIQ = iq_file;
+        function [nav_sol, ephem] = compute_position(obj, tracking_results)
+            %Warning a minimum of 30s is needed to calculate position,
+            %considering that at least 3 subframes are needed to find the
+            %satellites coordinates, each subframe is 6s long 
 
-            obj.probeData();
+            if (obj.msToProcess < 36000)
+                error("Record is too short to process, Need at least 36s to compute navigation solution");
+            end
+
+            %pre allocate space for nagiation results
+            %this process needs to happen for each satellite being tracked
+            %Preable of each subframe
+            subFrameStart = inf(1, obj.numChannels);
+
+            %Time of week (GPS) Time being decoded from the satellites
+            TOW = inf(1, obj.numChannels);
+
+            %create a list of satellites that actually tracked to the end
+            trackedChan = find([tracking_results.status] ~= '-');
+
+            % Decode the ephemeris from the subframes
+            for channelNr = trackedChan
+                %get the current PRN number
+                PRN = tracking_results(channelNr).PRN;
+                fprintf("Now decoding PRN %02d navigation message.......\n", PRN);
+
+                %Decode subframes to get ephemeris data
+                [ephem(PRN), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P);
+            end
+
+        end 
+
+        function [eph, subframeStart, TOW] = decode(obj, I_P) 
+            %create ephermeris data structure 
+            eph.idValid(1:5) = zeros(1, 5); %valid subframe
+            eph.PRN = [];
+            eph.week = [];
+            eph.TOW = [];
+
+            %subframe 1 elements. contains WN, clock corrections, health
+            %and accuracy
+            eph.weekNumber = [];
+            eph.accuracy = [];
+            eph.health = [];
+            eph.T_GD = [];
+            eph.IODC = [];
+            eph.t_oc = [];
+            eph.a_f2 = [];
+            eph.a_f1 = [];
+            eph.a_f0 = [];
+
+            %subframe 2. contains first part of ephemeris parameters
+            eph.IODE_2 = []; %Issue of data (ephemeris)
+            eph.C_rs = []; % Amplitude of sine harmonic correction term to the orbit radius
+            eph.deltan = []; %mean motion difference from computed value
+            eph.M_0 = []; %Mean anomoly
+            eph.C_uc = []; %Amplitude of cosine harmonic correction term to the argument of latitiude
+            eph.e = []; %ecentricity
+            eph.C_us = []; %Amplitude of sine harmonic correction term to the argument of latitude
+            eph.t_oe = []; %reference time ephemeris
+
+            %subframe 3. contains second part of ephemeris parameters
+            eph.C_ic = []; %Amplitude of cosine harmonic correction term to the angle of inclination
+            eph.omega_0 = []; %Longitude of Ascending node of orbit plane at weekly epoch
+            eph.C_is = []; %Amplitude of sine harmonic correction term to the angle of inclination
+            eph.i_0 = []; %Inclination angle at reference time
+            eph.C_rc = []; %Amplitude of cosine harmonic correction term to the orbit radius
+            eph.omega = []; %argument of perigee
+            eph.omega_dot = []; %rate of rigt ascension
+            eph.IODE_3 = []; %Issue of data (ephemeris)
+            eph.IDOT = []; %Rate of inclination angle
+
+            subframeStart = inf;
+            TOW = inf;
+
+            preamble = [1 -1 -1 -1 1 -1 1 1];
+            preamble_ms = kron(preamble, ones(1, 20));
+
+            %just in case we want to start searching later in the tracking
+            %loops
+            searchStartOffset = 0;
+            %grab valid bits in I_P
+            bits = I_P(1 + searchStartOffset : end);
             
-%             %open file location
-%             fid = fopen(obj.fnameIQ, 'rb');
-%             
-%             if (fid > 0)
-%                 %move to the start of the processing location
-%                 fseek(fid, 2*obj.skipNumBytes, 'bof');
-% 
-% 
-%                 %Find the number of samples per chipping sequence
-%                 samples_per_code = round(obj.fsamp / (obj.fchip / obj.codeLength));
-% 
-%                 %need to read in at least 42ms of data to get good course
-%                 %aquisition
-%                 codeLen = max(42, obj.NonCohTime + 2);
-%             
-%                 %read the data to perform acquisition
-%                 data = fread(fid, 2*codeLen*samples_per_code, obj.dataType)';
-%                 data = data(1:2:end) + 1i .* data(2:2:end);
-% 
-%                 disp("Aquiring satellites");
-%                 %% Aquisition
-%                 acq_results = obj.aquisition(data);
-%                 
-%                 if any(acq_results.carrFreq)
-%                     channel = obj.sortAcquisition(acq_results);
-%                     obj.dispFineCAResults(channel);
-% 
-%                 else 
-%                     warning("No Satellites to track");
-%                     return;
-%                 end
+            %create vector 1 and -1 to match the preamble
+            bits(bits > 0)  =  1;
+            bits(bits <= 0) = -1;
+
+            %correlate the tracking results with preamble to find instance
+            %of it in the bits 
+            clear index
+            clear index2
+            tlmXcorrResult = xcorr(bits, preamble_ms);
+            xcorrLength = (length(tlmXcorrResult) +  1) /2;
+
+            %get the index where the preamble starts
+            index = find(...
+                abs(tlmXcorrResult(xcorrLength : xcorrLength * 2 - 1)) > 153)' + ...
+                searchStartOffset;
+            %throw out indecies that might cause boundary conditions
+            index = index((index>40 & index<obj.msToProcess - (20 * 60 -1)) == 1);
+
+            for i = 1:size(index, 1)
+                %find the differences in time for the preable detection if
+                %it is approx 6s worth then we can move on to further
+                %checks
+                index2 = index - index(i);
+                if(~isempty(find(index2 == 6000, 1)))
+                    %re read bit values for preamble verification 
+                    %preamble is verified by checking the parity of the
+                    %first two words in the subframe. In total 62 bits
+                    %need to be read:
+                    % 2 bits from the previous subframe are needed for
+                    % parity check
+                    %60 bits for the first two 60bit words (TLM and HOW words)
+                    %index is to the start of the TLM word
+                    bits = I_P(index(i)-40 : index(i) + 20 * 60 -1)';
+
+                    %combine 20 values of each bit
+                    bits = reshape(bits, 20, (size(bits, 1) / 20));
+                    bits = sum(bits);
+
+                    %create vector 1 and -1 to match the preamble
+                    bits(bits > 0) = 1;
+                    bits(bits <= 0) = -1;
+
+                    if (obj.navPartyChk(bits(1:32)) ~= 0) && ...
+                            (obj.navPartyChk(bits(31:62)) ~= 0)
+                        %if the parity check is fine then save the pramble
+                        %starting positing for this channel
+                        subframeStart = index(i);
+                        break;
+                    end
+                end   
+            end
+
+            %Exclude the channel if there is no preamble
+            if subframeStart == inf
+                disp('Could not find valid preambles in channel! ');
+                return
+            end
+        end
+
+
+        function postProcess(obj)
+            %% probe data for validity
+            obj.probeData();
+
+            %open file location
+            fid = fopen(obj.fnameIQ, 'rb');
+            
+            if (fid > 0)
+                %move to the start of the processing location
+                fseek(fid, 2*obj.skipNumBytes, 'bof');
+
+
+                %Find the number of samples per chipping sequence
+                samples_per_code = round(obj.fsamp / (obj.fchip / obj.codeLength));
+
+                %need to read in at least 42ms of data to get good course
+                %aquisition
+                codeLen = max(42, obj.NonCohTime + 2);
+            
+                %read the data to perform acquisition
+                data = fread(fid, 2*codeLen*samples_per_code, obj.dataType)';
+                data = data(1:2:end) + 1i .* data(2:2:end);
+
+                disp("Aquiring satellites");
+                %% Aquisition
+                acq_results = obj.aquisition(data);
+                
+                if any(acq_results.carrFreq)
+                    channel = obj.sortAcquisition(acq_results);
+                    obj.dispFineCAResults(channel);
+
+                else 
+                    warning("No Satellites to track");
+                    return;
+                end
                 %get rid of acquisiton plots to start tracking
-%             close all;
-% 
-%             %% Tracking
-%             track_results = obj.tracking(fid, channel);
-%             obj.plotTracking(1:obj.numChannels, track_results, obj.msToProcess);
+                close all;
+
+                %% Tracking
+                track_results = obj.tracking(fid, channel);
+                obj.plotTracking(1:obj.numChannels, track_results, obj.msToProcess);
+                disp("Enter to continue to naviagtion solution");
+                pause;
+                close all;
+
+                %% Position solution
+
+            end
         end
     end
 end
-% end
