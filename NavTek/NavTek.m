@@ -53,10 +53,18 @@ classdef NavTek
 
         %% navigation solution settings
         navSolPeriod = 500;
+        elMask = 5; %degress [0-90] Must be able to see satellites at low elevations
 
         %% Constants
         c = 299792458;
         startOffset = 68.802; %[ms] Initial sign. travel time
+        mu = 3.986005e14; %(m^3/s^2) WGS 84 value of the earth's gravitational constant for GPS User
+        omega_e = 7.29212e-5; %(rad/s) WGS 84 value of the earth's rotation rate
+        gpsPi = 3.1415926535898; %pi used in GPS coordinate system
+        F = -4.442807633e-10; %Constant, [sec/(meter)^(1/2)]
+        half_week = 302400; %seconds
+        a = 6378137.0; %mean radius of the earth
+        flat = 1/298.257223563; % flattening factor of the earth
     end
 
     methods (Static)
@@ -330,7 +338,7 @@ classdef NavTek
 
         function integer = twosComp2dec(num)
             integer = bin2dec(num);
-            if(num(1) == 1)
+            if(num(1) == '1')
                 integer = integer - 2^size(num, 2);
             end
         end
@@ -343,10 +351,18 @@ classdef NavTek
 
             result = dec2bin(bitxor(bin2dec(data), invertMask), dataLength);
         end
+
+        function word = checkPhase(word, D30Star)
+            if D30Star == '1'
+                % Data bits must be inverted
+                word(1:24) = NavTek.invert(word(1:24));
+            end
+        end
     end
 
     methods
         function obj = NavTek()
+            addpath("googleearth_matlab/googleearth/");
             prompt = "Enter full IQ file path";
             disp(prompt);
             [file, path] = uigetfile("*.bin");
@@ -850,7 +866,7 @@ classdef NavTek
             end
         end
 
-        function [nav_sol, ephem] = compute_position(obj, tracking_results)
+        function [navSol, ephem] = compute_position(obj, tracking_results)
             %Warning a minimum of 30s is needed to calculate position,
             %considering that at least 3 subframes are needed to find the
             %satellites coordinates, each subframe is 6s long 
@@ -869,6 +885,7 @@ classdef NavTek
 
             %create a list of satellites that actually tracked to the end
             trackedChan = find([tracking_results.status] ~= '-');
+            trackedChan = trackedChan(1:end-1);
 
             % Decode the ephemeris from the subframes
             for channelNr = trackedChan
@@ -877,13 +894,13 @@ classdef NavTek
                 fprintf("Now decoding PRN %02d navigation message.......\n", PRN);
 
                 %Decode subframes to get ephemeris data
-                [ephem(channelNr), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P, PRN);
+                [ephem(PRN), subFrameStart(channelNr), TOW(channelNr)] = obj.decode(tracking_results(channelNr).I_P);
 
 
                 %Exclude a satellite if it does not have the necessary
                 %navigation data
 
-                if(isempty(ephem(channelNr).IODC) || isempty(ephem(channelNr).IODE_2) || isempty(ephem(channelNr).IODE_3) || (ephem(channelNr).health ~=0))
+                if(isempty(ephem(PRN).IODC) || isempty(ephem(PRN).IODE_2) || isempty(ephem(PRN).IODE_3) || (ephem(PRN).health ~=0))
                     %Exclude channel from the active list
                     trackedChan = setdiff(trackedChan, channelNr);
                     fprintf(' Ephemeris decoding fails for PRN %02d !\n', PRN);
@@ -892,57 +909,175 @@ classdef NavTek
                 end
             end
 
-         %check if the number of satellites is still above 4
-         if(isempty(trackedChan) || (size(trackedChan, 2) < 4))
-             disp('Too few satellites with ephemeris data for position calculations Exiting!');
-             nav_sol = [];
-             ephem = [];
-         end
-
-        %set the measurement-time point and step
-        %find start and end measurement point locations in IF signal stream
-        %with available measurements
-        sampleStart = zeros(1, obj.numChannels);
-        sampleEnd = inf(1, obj.numChannels);
-
-        for channelNr = trackedChan
-            sampleStart(channelNr) = tracking_results(channelNr).absoluteSample(subFrameStart(channelNr));
-            sampleEnd(channelNr) = tracking_results(channelNr).absoluteSample(end);
+             %check if the number of satellites is still above 4
+             if(isempty(trackedChan) || (size(trackedChan, 2) < 4))
+                 disp('Too few satellites with ephemeris data for position calculations Exiting!');
+                 nav_sol = [];
+                 ephem = [];
+             end
+    
+            %set the measurement-time point and step
+            %find start and end measurement point locations in IF signal stream
+            %with available measurements
+            sampleStart = zeros(1, obj.numChannels);
+            sampleEnd = inf(1, obj.numChannels);
+    
+            for channelNr = trackedChan
+                sampleStart(channelNr) = tracking_results(channelNr).absoluteSample(subFrameStart(channelNr));
+                sampleEnd(channelNr) = tracking_results(channelNr).absoluteSample(end);
+            end
+    
+            %second terms is to make space to avoid index exceeds matrix
+            %dimensions
+            sampleStart = max(sampleStart) + 1;
+            sampleEnd = min(sampleEnd) + 1;
+    
+            %measurement step in units of IF samples
+            measSampleStep = fix(obj.fsamp * obj.navSolPeriod/1000);
+    
+            %number of measurement points from measurement start to end
+            measNrSum = fix((sampleEnd - sampleStart)/measSampleStep);
+    
+            %initialization 
+            %set the local time to ind for the first satellite calculation of
+            %reciever positon. After first fix local time will be updated by
+            %measurement sample step
+            localTime = inf;
+    
+            fprintf("Positions are being computed. Please wait....\n");
+            for currMeasNr = 1:measNrSum
+                %positon index of current measurement time in IF signal stream
+                currMeasSample = sampleStart + measSampleStep*(currMeasNr - 1);
+                %find psuedo-ranges
+                [navSol.rawP(:, currMeasNr), transmitTime, localTime] = obj.calcPsuedorange(tracking_results, subFrameStart, TOW, currMeasSample, localTime, trackedChan);
+    
+    
+                %Find satellites positions
+                satPositions = obj.satPos(transmitTime(trackedChan), [tracking_results(trackedChan).PRN], ephem);
+    
+                %find the reciever position, doing this requires at least 4
+                %satellites to be present or else the solution is
+                %overdetermined
+                if(size(transmitTime, 2) > 3)
+                    %calculate reciever position and time bias
+                    [recv_state, LLA] = obj.leastSquares(satPositions, navSol.rawP(trackedChan, currMeasNr));
+    
+    
+                    navSol.X(currMeasNr)           = recv_state(1);
+                    navSol.Y(currMeasNr)           = recv_state(2);
+                    navSol.Z(currMeasNr)           = recv_state(3);
+                    navSol.bias_t(currMeasNr)     = recv_state(4);
+                    navSol.latitude(currMeasNr)    = LLA(1);
+                    navSol.longitude(currMeasNr)   = LLA(2);
+                    navSol.height(currMeasNr)      = LLA(3);
+                else
+                    navSol.X(currMeasNr)           = NaN;
+                    navSol.Y(currMeasNr)           = NaN;
+                    navSol.Z(currMeasNr)           = NaN;
+                    navSol.bias_t(currMeasNr)     = NaN;
+                    navSol.latitude(currMeasNr)    = NaN;
+                    navSol.longitude(currMeasNr)   = NaN;
+                    navSol.height(currMeasNr)      = NaN;
+    
+                    disp(['   Measurement No. ', num2str(currMeasNr), ...
+                           ': Not enough information for position solution.']);
+                    return;
+                end
+            end 
         end
 
-        %second terms is to make space to avoid index exceeds matrix
-        %dimensions
-        sampleStart = max(sampleStart) + 1;
-        sampleEnd = sampleEnd(isfinite(sampleEnd));
-        sampleEnd = max(sampleEnd) + 1;
+        function [state, LLA] = leastSquares(obj, satPos, psuedorange)
 
-        %measurement step in units of IF samples
-        measSampleStep = fix(obj.fsamp * obj.navSolPeriod/1000);
+            X = zeros(4, 1);
 
-        %number of measurement points from measurement start to end
-        measNrSum = fix((sampleEnd - sampleStart)/measSampleStep);
 
-        %initialization 
-        %set the local time to ind for the first satellite calculation of
-        %reciever positon. After first fix local time will be updated by
-        %measurement sample step
-        localTime = inf;
-
-        fprintf("Positions are being computed. Please wait....\n");
-        for currMeasNr = 1:measNrSum
-            %positon index of current measurement time in IF signal stream
-            currMeasSample = sampleStart + measSampleStep*(currMeasNr - 1);
-            %find psuedo-ranges
-            [nav_sol.rawP(:, currMeasNr), transmitTime, localTime] = obj.calcPsuedorange(tracking_results, subFrameStart, TOW, currMeasSample, localTime, trackedChan);
-
-            %save transmitTime 
-            nav_sol.transmitTime(trackedChan, currMeasNr) = transmitTime(trackedChan);
-
-            %Find satellites positions and clock corrections
-
+            P = satPos;
+            y = psuedorange;
+    
+            h = zeros(size(y, 1), 1);
+            H = zeros(size(y, 1), 4);
+    
+            while true
+                for kk = 1:size(y, 1)
+                    v = (X(1:3) - P(:, kk));
+                    f = (v'*v)^(1/2);
+    
+                    h(kk) = f - X(4);
+                    er = v' /f;
+                    H(kk, :) = [er, 1];
+                end
+    
+                X_old = X;
+    
+%                 calculate new estimate of X
+                X = X + H \ (y-h);
+    
+                delta_x = X(1:3) - X_old(1:3);
+                if((delta_x' * delta_x)^(1/2) < 0.1)
+                    break;
+                end
+   
+            end
+           
+            state = X;
+            [lat, lon, alt] = obj.ECEF_to_LLA(X(1:3));
+            LLA = [-lat, lon, alt]';
         end
-            
-        end 
+
+        function [Az, El] = calcAzEl(obj, Xt, Yt, Zt, Rx0)
+            Az = zeros(size(Xt));
+            El = Az;
+            [lat,lon, ~] = obj.ECEF_to_LLA(Rx0);
+            for i = 1:size(Xt,1)
+                for j = 1:size(Xt,2)
+                    r_Rx0_Svij = [Xt(i,j);Yt(i,j);Zt(i,j)]-Rx0;
+                    r_ENU = obj.LLA_to_ENU(lat,lon,r_Rx0_Svij);
+                    El(i,j) = asind(r_ENU(3)/norm(r_ENU));  % Calculates the elevation angle
+                    Az(i,j) = atan2d(r_ENU(1),r_ENU(2));    % Calculates the azimuth angle
+                end
+            end
+        end
+
+        function r_ENU = LLA_to_ENU(obj, lat, lon, r_Gnd_Sky)
+            R=[-sind(lon),cosd(lon),0;-sind(lat)*cosd(lon),-sind(lat)*sind(lon),cosd(lat);cosd(lat)*cosd(lon),cosd(lat)*sind(lon),sind(lat)]; % Build the ECEF to ENU rotation matrix
+            r_ENU=R*r_Gnd_Sky;    % Express the vector from the receiver to the SV in ENU coordinates 
+        end
+
+        function [lat, lon, alt] = ECEF_to_LLA(obj, r)
+            e_sq = (2*obj.flat - obj.flat^2);
+            e = sqrt(e_sq); %eccentricity of the earth
+
+            x = r(1, :);
+            y = r(2, :);
+            z = r(3, :);
+
+            p=sqrt(x.^2+y.^2);
+            [n,m] = size(x);
+            % Initializes Newton-Raphson
+            k_new=1/(1-e^2)*ones(n,m);
+            err_threshold=0.0001*ones(n,m);
+            err=1*ones(n,m);
+            % Iterates Newton-Raphson
+            while any(err>err_threshold)
+                k_old=k_new;
+                ci=(p.^2+(1-e^2)*z.^2.*k_old.^2).^(3/2)/(obj.a*e^2);
+                k_new=1+(p.^2+(1-e^2)*z.^2.*k_old.^3)./(ci-p.^2);
+                err=abs(k_new-k_old);
+            end
+            k=k_new;
+
+            lon=atan2(y,x); % Calculate longitude
+            lat=atan2(z.*k,p);   % Calculate latitude
+            % if lon>pi
+            %     lon=lon-2*pi;   % Ensures longitude is [-pi,pi)
+            % end
+
+            Rn = obj.a./sqrt(1-e^2*sin(lat).^2);
+            alt = p./cos(lat) - Rn;
+
+            lat = lat * 180/pi;
+            lon = lon * 180/pi;
+        end
 
         function [psuedoranges, transmitTime, localTime] = calcPsuedorange(obj, trackResults, subFrameStart, TOW, currMeasSample, localTime, channelList)
             transmitTime = inf(1, obj.numChannels);
@@ -972,6 +1107,7 @@ classdef NavTek
                 %number of PRN code
 
                 transmitTime(channelNr) = (codePhase/obj.codeLength + index - subFrameStart(channelNr)) * obj.codeLength/obj.fchip + TOW(channelNr);
+
             end
 
             %at first time of fix, local time is initialized by transmit
@@ -986,10 +1122,91 @@ classdef NavTek
             psuedoranges = (localTime - transmitTime)*obj.c;
         end
 
-        function [eph, subframeStart, TOW] = decode(obj, I_P, PRN) 
+        function satPositions = satPos(obj, transmit_time, prnList, ephem)
+            numOfSat = size(prnList, 2);
+            satPositions = zeros(3, numOfSat);
+
+            for ii = 1:numOfSat
+                prn = prnList(ii);
+                sqrtA = ephem(prn).sqrtA;        %Square root of the Semi-Major Axis
+                t_oe = ephem(prn).t_oe;          %Reference Time Ephemeris
+                deltan = ephem(prn).deltan;      %Mean Motion Differene from Computed Value
+                t_oc = ephem(prn).t_oc;          %Clock Data reference time of week
+                M_0 = ephem(prn).M_0;            %Mean Anomaly at Reference Time
+                w = ephem(prn).omega;            %Argument of Perigree
+                C_us = ephem(prn).C_us;          %Amplitude of Sine Harmonic Correction Term to the Argument of Latitude
+                C_uc = ephem(prn).C_uc;          %Amplitude of Cosine Harmonic Correction Term to the Argument of Latitude
+                C_rs = ephem(prn).C_rs;          %Amplitude of the Sine Harmonic Correction Term to the Orbit Radius
+                C_rc = ephem(prn).C_rc;          %Amplitude of the Cosine Harmonic Correction Term to the Orbit Radius
+                C_is = ephem(prn).C_is;          %Amplitude of the Sine Harmonic Correction Term to the Angle of Inclination
+                C_ic = ephem(prn).C_ic;          %Amplitude of the Sine Harmonic Correction Term to the Angle of Inclination
+                i0 = ephem(prn).i_0;             %Inclination Angle at Reference Time
+                IDOT = ephem(prn).IDOT;          %Rate Inclination Angle
+                omega_0 = ephem(prn).omega_0;    %Longitude of Ascending Node of Orbit Plane at Weekly Epoch
+                omega_dot = ephem(prn).omega_dot;%Rate of Right Ascension
+                e = ephem(prn).e; %eccentricity
+                T_GD = ephem(prn).T_GD;
+                a_f2 = ephem(prn).a_f2;
+                a_f1 = ephem(prn).a_f1;
+                a_f0 = ephem(prn).a_f0;
+
+                dt = obj.weekroll(transmit_time(ii) - t_oe);
+                satClkCorr = (a_f2 * dt + a_f1)*dt + a_f0 - T_GD;
+                t = transmit_time(ii) - satClkCorr;
+
+                A = sqrtA^2;                    %Semi-major axis
+                t_k = obj.weekroll(t - t_oe);
+                n_0 = sqrt(obj.mu/(A^3));           %(rad/s) Corrected mean motion
+                n = n_0 + deltan; %mean motion
+                M_k = M_0+n*t_k;                %Mean anomaly
+                M_k = rem(M_k + 2*obj.gpsPi, 2*obj.gpsPi); % reduce mean anomoly between 0 and 360 degrees
+
+                %Kepler's equation (M_k = E_k - esinE_k) may be solved for E_k by iteration:
+                E = zeros(1,10);
+                E(1) = M_k;                         %Initial value(radians)
+                for j = 2:10
+                    E(j) = M_k + e*sin(E(j-1));
+                end
+
+                E_k = E(10);                         %Final value (radians)
+                E_k = rem(E_k + 2*obj.gpsPi, 2*obj.gpsPi);
+               
+                v_k = atan2(sqrt(1-e^2)*sin(E_k), cos(E_k)-e);        %True Anomaly
+                phi_k = v_k + w;                                   %Argument of Latitude
+                phi_k = rem(phi_k + 2*obj.gpsPi, 2*obj.gpsPi);
+
+                %%Second Harmonic Perturbations
+                duk = C_us*sin(2*phi_k) + C_uc*cos(2*phi_k);       %Argument of Lattitude Correction
+                drk = C_rs*sin(2*phi_k) + C_rc*cos(2*phi_k);       %Radius Correction
+                dik = C_is*sin(2*phi_k) + C_ic*cos(2*phi_k);       %Inclination Correction
+                uk = phi_k+duk;                                    %Corrected Argument of Latitude
+                rk = A*(1-e*cos(E_k))+ drk;                        %Corrected radius
+                ik = i0 +dik + (IDOT)*t_k;                         %Corrected Inclination
+                %%Positions in orbital
+                x_k = rk*cos(uk);
+                y_k = rk*sin(uk);
+                %Corrected longitude of ascending node
+                omega_k = omega_0 + (omega_dot - obj.omega_e)*t_k - obj.omega_e*t_oe;
+                omega_k = rem(omega_k + 2*obj.gpsPi, 2*obj.gpsPi);
+                %Earth-fixed
+                satPositions(1, ii) = x_k*cos(omega_k) - y_k*cos(ik)*sin(omega_k);
+                satPositions(2, ii) = x_k*sin(omega_k) + y_k*cos(ik)*cos(omega_k);
+                satPositions(3, ii) = y_k*sin(ik);
+            end
+        end
+
+        function t = weekroll(obj, time)
+            t = time;
+            if time > obj.half_week
+                t = time - 2*obj.half_week;
+            elseif time < -obj.half_week
+                t = time + 2*obj.halfweek;
+            end
+        end
+
+        function eph = ephem_init(obj)
             %create ephermeris data structure 
             eph.idValid(1:5) = zeros(1, 5); %valid subframe
-            eph.PRN = PRN;
             eph.week = [];
             eph.TOW = [];
 
@@ -1026,7 +1243,10 @@ classdef NavTek
             eph.omega_dot = []; %rate of rigt ascension
             eph.IODE_3 = []; %Issue of data (ephemeris)
             eph.IDOT = []; %Rate of inclination angle
+        end
 
+        function [eph, subframeStart, TOW] = decode(obj, I_P)     
+            eph = obj.ephem_init();
             subframeStart = inf;
             TOW = inf;
 
@@ -1098,33 +1318,34 @@ classdef NavTek
             end
 
             %copy 5-subframes long
-            navBits = I_P(subframeStart - 20 : subframeStart + (1500 * 20) -1)';
+
+            navBitsSamples = I_P(subframeStart - 20 : subframeStart + (1500 * 20) -1)';
             %reshape into 20 different values of bits
-            navBits = reshape(navBits, 20, (size(navBits, 1) / 20));
-            navBits = sum(navBits);
+            navBitsSamples = reshape(navBitsSamples, 20, size(navBitsSamples, 1) / 20);
+            navBits = sum(navBitsSamples);
 
             navBits = (navBits > 0);
 
-            navBits = dec2bin(navBits);
+            navBitsBin = dec2bin(navBits);
 
 
-            [eph, TOW] = obj.ephermeris(navBits(2:1501)', navBits(1), eph, TOW);
+            [eph, TOW] = obj.ephermeris(navBitsBin(2:1501)', navBitsBin(1));
         end
 
-        function [eph, TOW] = ephermeris(obj, bits, D30star, eph, TOW) 
-            % Pi used in the GPS coordinate system
-            gpsPi = 3.1415926535898; 
+        function [eph, TOW] = ephermeris(obj, bits, D30star) 
 
+            eph = obj.ephem_init();
             %decode all five subframes
             for i = 1:5
                 %grab a single subframe out of all of the elements
                 %--- "Cut" one sub-frame's bits ---------------------------------------
                 subframe = bits(300*(i-1)+1 : 300*i);
 
+                %correct polarity of data bits in all 10 words
                 for j = 1:10
-                    if D30star == '1'
-                        subframe(30*(j-1)+1 : 30*j) = obj.invert(subframe(30*(j-1)+1 : 30*j));
-                    end
+                    [subframe(30*(j-1)+1 : 30*j)] = obj.checkPhase(subframe(30*(j-1)+1 : 30*j), D30star);
+                    
+                    D30star = subframe(30*j);
                 end
 
                 %decode subframe id
@@ -1145,24 +1366,24 @@ classdef NavTek
                     case 2
                         eph.IODE_2 = bin2dec(subframe(61:68));
                         eph.C_rs = obj.twosComp2dec(subframe(69:84)) * 2^(-5);
-                        eph.deltan = obj.twosComp2dec(subframe(91:106)) * 2^(-43) * gpsPi;
-                        eph.M_0 = obj.twosComp2dec([subframe(107:114) subframe(121:144)]) * 2^(-31) * gpsPi;
+                        eph.deltan = obj.twosComp2dec(subframe(91:106)) * 2^(-43) * obj.gpsPi;
+                        eph.M_0 = obj.twosComp2dec([subframe(107:114) subframe(121:144)]) * 2^(-31) * obj.gpsPi;
                         eph.C_uc = obj.twosComp2dec(subframe(151:166)) * 2^(-29);
                         eph.e = bin2dec([subframe(167:174) subframe(181:204)]) * 2^(-33);
                         eph.C_us = obj.twosComp2dec(subframe(211:226)) * 2^(-29);
                         eph.sqrtA = bin2dec([subframe(227:234) subframe(241:264)]) * 2^(-19);
-                        eph.t_oe = bin2dec(subframe(271:286)) * 2^(-19);
+                        eph.t_oe = bin2dec(subframe(271:286)) * 2^(4);
                         eph.idValid(1) = 2;
                     case 3
                         eph.C_ic = obj.twosComp2dec(subframe(61:76)) * 2^(-29);
-                        eph.omega_0 = obj.twosComp2dec([subframe(77:84) subframe(91:114)]) * 2^(-31) * gpsPi;
+                        eph.omega_0 = obj.twosComp2dec([subframe(77:84) subframe(91:114)]) * 2^(-31) * obj.gpsPi;
                         eph.C_is = obj.twosComp2dec(subframe(121:136)) * 2^(-29);
-                        eph.i_0 = obj.twosComp2dec([subframe(137:144) subframe(151:174)]) * 2^(-31) * gpsPi;
+                        eph.i_0 = obj.twosComp2dec([subframe(137:144) subframe(151:174)]) * 2^(-31) * obj.gpsPi;
                         eph.C_rc = obj.twosComp2dec(subframe(181:196)) * 2^(-5);
-                        eph.omega = obj.twosComp2dec([subframe(197:204) subframe(211:234)]) * 2^(-31) * gpsPi;
-                        eph.omega_dot = obj.twosComp2dec(subframe(241:264)) * 2^(-43) * gpsPi;
+                        eph.omega = obj.twosComp2dec([subframe(197:204) subframe(211:234)]) * 2^(-31) * obj.gpsPi;
+                        eph.omega_dot = obj.twosComp2dec(subframe(241:264)) * 2^(-43) * obj.gpsPi;
                         eph.IODE_3 = bin2dec(subframe(271:278));
-                        eph.IDOT = obj.twosComp2dec(subframe(279:292)) * 2^(-43) * gpsPi;
+                        eph.IDOT = obj.twosComp2dec(subframe(279:292)) * 2^(-43) * obj.gpsPi;
                         eph.idValid(1) = 3;
                     case 4
                         %Almanac amd ionospheric model, UTC parameters
@@ -1223,7 +1444,9 @@ classdef NavTek
                 fclose(fid);
 
                 %% Position solution
-                [navResults, ephem] = compute_position(track_results);
+                [navResults, ephem] = obj.compute_position(track_results);
+                kml_str = ge_point(navResults.longitude, -navResults.latitude - .48, navResults.height);
+                ge_output(['./NavTek.kml'], kml_str);
 
             end
         end
