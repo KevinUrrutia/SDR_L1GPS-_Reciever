@@ -839,7 +839,7 @@ classdef NavTek
             end
         end
 
-        function [navSol, ephem] = compute_position(obj, tracking_results)
+        function [navSol, ephem, satPositions] = compute_position(obj, tracking_results)
             %Warning a minimum of 30s is needed to calculate position,
             %considering that at least 3 subframes are needed to find the
             %satellites coordinates, each subframe is 6s long 
@@ -1364,6 +1364,21 @@ classdef NavTek
             eph.TOW = TOW;
         end
 
+        function plotSatellite(obj, satPos)
+            figure;
+            plot3(0, 0, 0, "m.")
+            hold on;
+            for ii = 1:size(satPos, 2)
+                plot3(satPos(1, ii), satPos(2, ii), satPos(3, ii), "b.");
+                hold on;
+            end
+            hold off;
+            title("Satellite Positions in ECEF frame");
+            xlabel("Prime Meridian (m)");
+            ylabel("(m)");
+            zlabel("true North (m)");
+        end
+
 
         function postProcess(obj)
             %% probe data for validity
@@ -1411,7 +1426,15 @@ classdef NavTek
                 fclose(fid);
 
                 %% Position solution
-                [navResults, ephem] = obj.compute_position(track_results);
+                [navResults, ephem, satPosition] = obj.compute_position(track_results);
+
+                %% plot satellite positions in the ECEF 
+                obj.plotSatellite(satPosition);
+                disp("Enter to continue to KML file");
+                pause;
+                close all;
+
+                %% create a KML file
                 kml_str = ge_point(navResults.longitude + 2, -navResults.latitude - .48, navResults.height);
                 ge_output(['./NavTek.kml'], kml_str);
 
