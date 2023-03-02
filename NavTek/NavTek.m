@@ -1425,7 +1425,7 @@ classdef NavTek
 
                 fclose(fid);
 
-                %% Position solution
+                %% Get Position solutions
                 [navResults, ephem, satPosition] = obj.compute_position(track_results);
 
                 %% plot satellite positions in the ECEF 
