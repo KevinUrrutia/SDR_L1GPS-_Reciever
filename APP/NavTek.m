@@ -24,11 +24,11 @@ classdef NavTek
         %satellite PRN numbers
         SVn = 1:32;   
         %minimum, maximum, resolution of doppler search
-        fdmin = -7000; %[Hz]
-        fdmax = 7000; %[Hz]
-        delta_fd = 1000; %[Hz]
+        fdmin = -6000; %[Hz]
+        fdmax = 6000; %[Hz]
+        delta_fd = 500; %[Hz]
         %NonCoherent integration times after 1ms coherent integration
-        NonCohTime = 20; 
+        NonCohTime = 30; 
         %Sampling rate for downsampling 
         resamplingThresh = 8e6; %[Hz]
         %acquisition threshold for desision rule
@@ -141,12 +141,12 @@ classdef NavTek
             
         end
 
-        %calculate the loop filter coefficients
-        function [t1, t2] = calcLoppCoeff(LBW, zeta, k)
+        %Calculate the noise equivalent bandwidth
+        function [tau1, tau2] = calcLoppCoeff(f_n, zeta, k)
             %Calculate the natural frequency
-            Wn = (LBW * 8 * zeta) / (4 * zeta.^2 + 1);
-            t1 = k / (Wn * Wn);
-            t2 = 2 * zeta / Wn;
+            B = (f_n * 8 * zeta) / (4 * zeta.^2 + 1);
+            tau1 = k / (B * B);
+            tau2 = 2 * zeta / B;
         end
 
         function plotTracking(channels, tracking_results, msToProcess)
@@ -270,18 +270,18 @@ classdef NavTek
                     title('CNo Estimation')
                     ylabel('dB-Hz')
                     xlabel('epoch computation')
-                end %if trackResults(channelNr).status == 'T' 
+                end 
     
-            end % for channelNr = channelList
+            end 
         end
 
         function CNo = CNoVSM(I, Q, T) 
-            Z = I.^2 + Q.^2;
-            Zm = mean(Z);
-            Zv = var(Z);
+            X_p = I.^2 + Q.^2;
+            X_p_mean = mean(X_p); %calculation of first moment
+            X_p_var = var(X_p); %calculation of second moment
 
-            Pavg = sqrt(Zm^2 - Zv);
-            Nv = 0.5*(Zm - Pavg);
+            Pavg = sqrt(X_p_mean^2 - X_p_var); %average for one std away from the mean
+            Nv = 0.5*(X_p_mean - Pavg);
             CNo = 10 * log10(abs((1/T)*Pavg/(2*Nv)));
         end
 
@@ -336,10 +336,10 @@ classdef NavTek
             end
         end
 
-        function integer = twosComp2dec(num)
-            integer = bin2dec(num);
+        function num = twosComp2dec(binNum)
+            num = bin2dec(binNum);
             if(num(1) == '1')
-                integer = integer - 2^size(num, 2);
+                num = num - 2^size(binNum, 2); %takes two's comp if negative
             end
         end
 
@@ -388,7 +388,7 @@ classdef NavTek
                 sampsPerCode = round(obj.fsamp / (obj.fchip / obj.codeLength));
 
                 %read in the data 
-                [data, count] = fread(fid, [1, 2 * 100 * sampsPerCode], obj.dataType);
+                [X_p, count] = fread(fid, [1, 2 * 100 * sampsPerCode], obj.dataType);
 
                 fclose(fid);
 
@@ -402,10 +402,10 @@ classdef NavTek
                 f.Position(3:4) = [1000, 1000];
 
                 %% Time domain plot
-                data=data(1:2:end) + 1i .* data(2:2:end);
+                X_p = X_p(1:2:end) + 1i .* X_p(2:2:end);
                 subplot(3, 2, 4);
                 plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
-                real(data(1:round(sampsPerCode/2))));
+                real(X_p(1:round(sampsPerCode/2))));
 
                 axis tight;    grid on;
                 title ('Time domain plot (I)');
@@ -413,7 +413,7 @@ classdef NavTek
 
                 subplot(3, 2, 3);
                 plot(1000 * timeScale(1:round(sampsPerCode/2)), ...
-                imag(data(1:round(sampsPerCode/2))));
+                imag(X_p(1:round(sampsPerCode/2))));
 
                 axis tight;    grid on;
                 title ('Time domain plot (Q)');
@@ -421,7 +421,7 @@ classdef NavTek
 
                 %% Frequency domain plot
                 subplot(3,2,1:2);
-                [sigspec,freqv]=pwelch(data, 32768, 2048, 32768, obj.fsamp,'twosided');
+                [sigspec,freqv]=pwelch(X_p, 32768, 2048, 32768, obj.fsamp,'twosided');
                 plot(([-(freqv(length(freqv)/2:-1:1));freqv(1:length(freqv)/2)])/1e6, ...
                 10*log10([sigspec(length(freqv)/2+1:end);
                 sigspec(1:length(freqv)/2)]));
@@ -432,16 +432,16 @@ classdef NavTek
 
                 %% Histogram
                 subplot(3, 2, 6);
-                histogram(real(data), -128:128)
-                dmax = max(abs(data)) + 1;
+                histogram(real(X_p), -128:128)
+                dmax = max(abs(X_p)) + 1;
                 axis tight;     adata = axis;
                 axis([-dmax dmax adata(3) adata(4)]);
                 grid on;        title ('Histogram (I)');
                 xlabel('Bin');  ylabel('Number in bin');
             
                 subplot(3, 2, 5);
-                histogram(imag(data), -128:128)
-                dmax = max(abs(data)) + 1;
+                histogram(imag(X_p), -128:128)
+                dmax = max(abs(X_p)) + 1;
                 axis tight;     adata = axis;
                 axis([-dmax dmax adata(3) adata(4)]);
                 grid on;        title ('Histogram (Q)');
@@ -455,12 +455,11 @@ classdef NavTek
             %% Initialization
             %==Variable initialization for course aquisition==============
             %number of samples per chipping sequence
-            samplesPerCode = round(obj.fsamp / (obj.fchip / obj.codeLength));
+            sampsPerCode = round(obj.fsamp / (obj.fchip / obj.codeLength));
             %find sampling period 
-            ts = 1 / obj.fsamp;
-            %Find phase points of 2ms local carrier wave (1 ms for local duplicate,
-            % other 1ms for zeros padding)
-            phasePoints = (0: (samplesPerCode*2-1)) * 2 * pi * ts;
+            tau = 1 / obj.fsamp;
+            %Find phase of 2ms 
+            phase = (0: (sampsPerCode*2-1)) * 2 * pi * tau;
             %number of frequency bins for specified search band
             numFreqBins = round(obj.fdmax * 2 / obj.delta_fd) + 1;
             %carrier frequency bins to be searched
@@ -476,65 +475,73 @@ classdef NavTek
 
             %==Variables for fine aquisition==============================
             %fine frequency search step
-            fineSearchStep = 25;
+            fineStep = 25;
             %Number of frequency bins for fine aquisition
-            numFineBins = round(obj.delta_fd / fineSearchStep) + 1;
+            numFineBins = round(obj.delta_fd / fineStep) + 1;
             %Carrier frequencies of fine frequency bins
             fineFreqBins = zeros(1, numFineBins);
             %Correlation values for all find freqeucny bins
             fineResult = zeros(1, numFineBins);
             %Coherent integration of 40 codes
-            sumPerCode = zeros(1, 40);
+            RFaccum = zeros(1, 40);
             %phase points of the local carrier wave 
-            finePhasePoints = (0 : (40 * samplesPerCode-1)) * 2 * pi * ts;
+            finePhase = (0 : (40 * sampsPerCode-1)) * 2 * pi * tau;
 
             %==Input signal power for GRLT statistic calculation
-            sigPower = sqrt(var(data(1:samplesPerCode)) * samplesPerCode);
+            sigPower = sqrt(var(data(1:sampsPerCode)) * sampsPerCode);
 
             %Preform search for all listed satellite numbers....
-%             fprintf('(');
             f = waitbar(0,'Acquisition Starting...');
             pause(.5)
             i = 1;
             for PRN = obj.SVn
                 %% Course Aquisition
                 %generate PRN sqequences
-                caCodesTable = obj.generateGoldSeq(obj.fsamp, obj.fchip, obj.codeLength, PRN, true);
+                caCodes = obj.generateGoldSeq(obj.fsamp, obj.fchip, obj.codeLength, PRN, true);
                 %add zero padding samples
-                caCode2ms = [caCodesTable, zeros(1, samplesPerCode)];
+                caCode2ms = [caCodes, zeros(1, sampsPerCode)];
+%                 caCode2ms = resample(caCodes, obj.fsamp*sampsPerCode, obj.fchip);
                 %search results of all frequency bins and code shifts
-                results = zeros(numFreqBins, samplesPerCode * 2);
+                results = zeros(numFreqBins, sampsPerCode * 2);
                 %perform DFT of CA codes
-                caCodeFreqDom = conj(fft(caCode2ms));
+                C_c = conj(fft(caCode2ms));
 
                 %make correlation for all frequency bins
+                %frequnecy bin values:
+                fdVec = -obj.fdmax:obj.delta_fd:obj.fdmax;
+                ii = 1;
                 for freqBinIndex = 1:numFreqBins
                     %generate carrier wave frequency grid
-                    courseFreqBins(freqBinIndex) = obj.fIF + obj.fdmax - ...
-                        obj.delta_fd * (freqBinIndex - 1);
+                    courseFreqBins(freqBinIndex) = obj.fIF + fdVec(ii);
                     
                     %generate local sine and cosine
-                    sigCarr = exp(-1i * courseFreqBins(freqBinIndex) * phasePoints);
+                    Xp_c = exp(-1i * courseFreqBins(freqBinIndex) * phase);
 
                     %Complete Correlation
                     for nonCohIndex = 1: obj.NonCohTime
                         %Take 2ms of input data to do correlation
-                        signal = data((nonCohIndex - 1) * samplesPerCode + 1: (nonCohIndex + 1) * samplesPerCode);
+                        Xp = data((nonCohIndex - 1) * sampsPerCode + 1: (nonCohIndex + 1) * sampsPerCode);
                         
                         %remove the carrier from the signal
-                        I = real(sigCarr .* signal);
-                        Q = imag(sigCarr .* signal);
-                        %convert baseband signal to the frequency domain
-                        IQfreqDom = fft(I + 1i * Q);
+                        F_X = fft(Xp_c .* Xp);
                         %Multiplication in frequency domain corresponds to
                         %correlation in time domain
-                        convCodeIQ = IQfreqDom .* caCodeFreqDom;
+                        X_c = F_X .* C_c;
                         %perform DFT and store correlation results
-                        cohResults = abs(ifft(convCodeIQ));
+                        S_k = abs(ifft(X_c));
                         %Non Coherent Integration
-                        results(freqBinIndex, :) = results(freqBinIndex, :) + cohResults;
+                        results(freqBinIndex, :) = results(freqBinIndex, :) + S_k;
                     end
+                    ii = ii + 1;
                 end 
+
+%                 S = mesh(results);
+%                 grid on;
+%                 ylabel('f_d bin [Hz]')
+%                 xlabel('t_s bin [sec]')
+%                 title(strcat(['C/A for PRN ' int2str(PRN)]))
+%                 pause(1);
+%                 clf(S);
 
                 %% Find Correlation peaks for CA
                 %find correlation peaks for CA and teh carrier frequency
@@ -552,7 +559,7 @@ classdef NavTek
                     PRN_visual{i} = PRN;
                     i = i + 1;
                     
-                     %-------- Create Waitbar ---------------------------
+                    %-------- Create Waitbar ---------------------------
                     waitbar(0, f, sprintf('Signal found at Satellite %02d', PRN));
                     pause(.5)
                     waitbar(3/10, f, sprintf('Signal found at Satellite %02d', PRN));
@@ -562,56 +569,56 @@ classdef NavTek
                     waitbar(10/10, f, sprintf('Signal found at Satellite %02d', PRN));
                     pause(.5)
                     %-------- End Waitbar -------------------------------
-                    
+
                     %indicate PRN number of detected signal
+                    fprintf('%02d ', PRN);
+
                     %Prepare 20ms of code, carrier and input signals
                     %CA code with 10230 chips
                     caCode = obj.generateGoldSeq(obj.fsamp, obj.fchip, obj.codeLength, PRN, false);
                     % C/A code sample index
-                    codeValueIndex = floor((ts * (0 : 40*samplesPerCode -1)) / ...
-                                    (1/obj.fchip));
+                    codeIdx = floor((tau * (0 : 40*sampsPerCode -1)) / (1/obj.fchip));
                     % C/A code samples
-                    caCode40ms = caCode(rem(codeValueIndex, obj.codeLength) + 1);
-                    % Take 40cm incoming signal for fine acquisition
-                    sig40cm = data(codePhase:codePhase + 40*samplesPerCode -1);
+                    caCode40ms = caCode(rem(codeIdx, obj.codeLength) + 1); % add one for matlab indexing
+                    % Take 40ms incoming signal for fine acquisition
+                    X_p40cm = data(codePhase:codePhase + 40*sampsPerCode - 1);
 
                     %search fine freqency bins
-                    for fineBinIndex = 1 : numFineBins
+                    fine_fdVec = -obj.delta_fd/2:fineStep:obj.delta_fd/2;
+                    ii = 1;
+                    for fineBinIdx = 1 : numFineBins
                         %--- Correlation for each code --------------------------------
                         % Carrier frequencies of the frequency bins
-                        fineFreqBins(fineBinIndex) = courseFreqBins(acqCoarseBin) + ...
-                            obj.delta_fd/2 - fineSearchStep * (fineBinIndex - 1);
+                        fineFreqBins(fineBinIdx) = courseFreqBins(acqCoarseBin) + fine_fdVec(ii);
 
                         % Local carrier signal
-                        sigCarr40cm = exp(-1i * fineFreqBins(fineBinIndex) * finePhasePoints);
+                        X_p_c40cm = exp(-1i * fineFreqBins(fineBinIdx) * finePhase);
                         % Wipe off code and carrier from incoming signals
-                        basebandSig = sig40cm .* caCode40ms .* sigCarr40cm;
+                        X_p = X_p40cm .* caCode40ms .* X_p_c40cm;
 
                         % Coherent integration for each code
-                        for index = 1:40
-                            sumPerCode(index) = sum(basebandSig( samplesPerCode * ...
-                                (index - 1) + 1 : samplesPerCode * index ));
+                        for jj = 1:40
+                            RFaccum(jj) = sum(X_p(sampsPerCode * (jj - 1) + 1 : sampsPerCode * jj));
                         end
 
-                        %--- Search Nav bit edge for ----------------------------------
                         % 20 cases of Nav bit edge
                         maxPower = 0;
-                        for comIndex = 1:20
+                        cases = 20;
+                        for comIndex = 1:cases
                             % Power for 20ms coherent integration
-                            comPower = abs(sum(sumPerCode(comIndex:comIndex+19)));
-                            % Maximal integration power
+                            comPower = abs(sum(RFaccum(comIndex:comIndex+cases-1)));
+                            % Max integration power
                             maxPower = max(maxPower,comPower);
                         end % Search different NH code combiniations
-                        fineResult(fineBinIndex) = maxPower;
-                    end % for numOfFineBins
+                        fineResult(fineBinIdx) = maxPower;
+                        ii = ii + 1;
+                    end 
 
-                    %--- Find the fine carrier freq. ----------------------------------
-                    [~, maxFinBin] = max(fineResult);
+                    [~, maxFinBin] = max(fineResult); %fine carrier frequency
                     acq_results.carrFreq(PRN) = fineFreqBins(maxFinBin);
                     % Save code phase acquisition result
                     acq_results.codePhase(PRN) = codePhase;
-                    %signal found, if IF =0 just change to 1 Hz to allow processing
-                    if(acq_results.carrFreq(PRN) == 0)
+                    if(acq_results.carrFreq(PRN) == 0) % signal has been found
                         acq_results.carrFreq(PRN) = 1;
                     end
                 else
@@ -624,59 +631,35 @@ classdef NavTek
                     pause(.5)
                     waitbar(10/10, f, sprintf('No signal found at Satellite %02d', PRN));
                     pause(.5)
+
                 end
             end
             waitbar(1,f,'Opening Acquisition Results...');
             close(f)
         end
 
-        function channel = sortAcquisition(obj, acqResults)
-            channel = [];
-            channel.PRN = 0;
-            channel.acquiredFreq = 0;
-            channel.codePhase = 0;
-            channel.status          = '-';
+        function sat = rankAcquisition(obj, acqResults)
+            sat = [];
+            sat.PRN = 0;
+            sat.acquiredFreq = 0;
+            sat.codePhase = 0;
+            sat.status          = '-';
 
             [~, PRNindexes] = sort(acqResults.peakMetric, 2, 'descend');
-            channel = repmat(channel, 1, obj.numChannels);
+            sat = repmat(sat, 1, obj.numChannels);
             for ii = 1:min([obj.numChannels, sum(acqResults.carrFreq ~= 0)])
-                channel(ii).PRN          = PRNindexes(ii);
-                channel(ii).acquiredFreq = acqResults.carrFreq(PRNindexes(ii));
-                channel(ii).codePhase    = acqResults.codePhase(PRNindexes(ii));
+                sat(ii).PRN          = PRNindexes(ii);
+                sat(ii).acquiredFreq = acqResults.carrFreq(PRNindexes(ii));
+                sat(ii).codePhase    = acqResults.codePhase(PRNindexes(ii));
                 
                 % Set tracking into mode (there can be more modes if needed e.g. pull-in)
-                channel(ii).status       = 'T';
+                sat(ii).status       = 'T';
             end
-        end
-
-        function dispFineCAResults(obj, channel)
-            fprintf("\nFINE ACQUISITION RESULTS\n");
-            fprintf('  *=========*=====*===============*===========*=============*========*\n');
-            fprintf(  '| Channel | PRN |   Frequency   |  Doppler  | Code Offset | Status |\n');
-            fprintf(  '*=========*=====*===============*===========*=============*========*\n');
-
-            for channelNr = 1 : obj.numChannels
-                if (channel(channelNr).status ~= '-')
-                    fprintf('|      %2d | %3d |  %2.5e |   %5.0f   |    %6d   |     %1s  |\n', ...
-                            channelNr, ...
-                            channel(channelNr).PRN, ...
-                            channel(channelNr).acquiredFreq, ...
-                            channel(channelNr).acquiredFreq - obj.fIF, ...
-                            channel(channelNr).codePhase, ...
-                            channel(channelNr).status);
-                else
-                    fprintf('|      %2d | --- |  ------------ |   -----   |    ------   |   Off  |\n', ...
-                            channelNr);
-                end
-            end
-
-            fprintf('*=========*=====*===============*===========*=============*========*\n\n');
         end
 
         function tracking_results = tracking(obj, fid, channel)
             % ----- For LogPose APP ------
             iconmap = imread('icons\coffee-cup.jpg');
-            
             
             % intialize tracking structure array
             tracking_results.status = '-';
@@ -700,14 +683,14 @@ classdef NavTek
             tracking_results.pllDescr = inf(1, obj.msToProcess);
             tracking_results.pllDescrFilt =inf(1, obj.msToProcess);
             %Remainder of code and carr phase
-            tracking_results.remCodePhase = inf(1, obj.msToProcess);
-            tracking_results.remCarrPhase = inf(1, obj.msToProcess);
+            tracking_results.r_code_phase = inf(1, obj.msToProcess);
+            tracking_results.r_carr_phase = inf(1, obj.msToProcess);
             %C/N0
             tracking_results.CN0.VSMValue = zeros(1, floor(obj.msToProcess/obj.CN0_VSMinterval));
             tracking_results.CN0.VSMidx = zeros(1, floor(obj.msToProcess/obj.CN0_VSMinterval));
 
             %copy struct for all tracked satellites
-            tracking_results = repmat(tracking_results, 1, 12);
+            tracking_results = repmat(tracking_results, 1, obj.numChannels);
             
             %---------------Intitalize tracking variables
             codePeriods = obj.msToProcess;
@@ -715,187 +698,186 @@ classdef NavTek
             %---------------DLL variables
             earlyLateSPC = obj.dllCorrelatorSpacing;
             %summation interval
-            PDIcode = obj.intTime;
+            int_code = obj.intTime;
             %calculate loop coeffiecient values
             %calculate loop coeffiecient values
-            [t1_code, t2_code] = obj.calcLoppCoeff(obj.dllNoiseBandwidth, obj.dllDampeningRatio, 1);
+            [tau1_code, tau2_code] = obj.calcLoppCoeff(obj.dllNoiseBandwidth, obj.dllDampeningRatio, 1);
             
             %--------------PLL variables
-            PDIcarr = obj.intTime;
-            [t1_carr, t2_carr] = obj.calcLoppCoeff(obj.pllNoiseBandwidth, obj.pllDampeningRatio, 0.25);
-            
-            %--------- Create msgbox -----------------------------------
+            int_carr = obj.intTime;
+            [tau1_carr, tau2_carr] = obj.calcLoppCoeff(obj.pllNoiseBandwidth, obj.pllDampeningRatio, 0.25);
+
             f = msgbox({'Calculations starting...';'This will take awhile so please get some coffee ^_^'}, ...
                         "Tracking...","custom",iconmap);
-            msgboxFontSize(f,12)
-
-            for channelNr = 1:obj.numChannels
+%             msgboxFontSize(f,12);
+            for ii = 1:obj.numChannels
                 %acquistion happened correctly
-                if channel(channelNr).PRN ~= 0
-                    tracking_results(channelNr).PRN = channel(channelNr).PRN;
+                if channel(ii).PRN ~= 0
+                    tracking_results(ii).PRN = channel(ii).PRN;
 
                     %move to the appropriate start of the file, this should be after the acquisition results have been grabbed
-                    fseek(fid, 2*(obj.skipNumBytes + channel(channelNr).codePhase - 1), 'bof');
+                    fseek(fid, 2*(obj.skipNumBytes + channel(ii).codePhase - 1), 'bof');
             
                     %generate C/A code sampled 1x/chip
-                    ca_gen = obj.generateGoldSeq(obj.fsamp, obj.fchip, obj.codeLength, channel(channelNr).PRN, 0);
-                    caCode = [ca_gen(1023), ca_gen, ca_gen(1)];
+                    caCode_gen = obj.generateGoldSeq(obj.fsamp, obj.fchip, obj.codeLength, channel(ii).PRN, 0);
+                    caCode = [caCode_gen(1023), caCode_gen, caCode_gen(1)];
 
-                    %---Perform Initializations for NCO
+                    %Initialize NCO
                     %define initial code frequency basis for NCO
-                    codeFreq = obj.fchip;
+                    NCO = obj.fchip; %will be updated based on tracking loops
                     %define residual code phase
-                    remCodePhase = 0;
+                    r_cp = 0;
                     %define carrier frequency used over entire tracking period
-                    carrFreq = channel(channelNr).acquiredFreq;
-                    carrFreqBasis = channel(channelNr).acquiredFreq;
+                    f_c = channel(ii).acquiredFreq;
+                    carrFreqBasis = channel(ii).acquiredFreq;
                     %define residual carrier phase
-                    remCarrPhase = 0;
+                    r_carr_phase = 0;
 
                     %code tracking loop parameters
-                    oldCodeNco   = 0.0;
-                    oldCodeError = 0.0;
+                    prev_CodeNco   = 0;
+                    prev_CodeError = 0;
             
                     %carrier/Costas loop parameters
-                    oldCarrNco   = 0.0;
-                    oldCarrError = 0.0;
+                    prev_CarrNco   = 0;
+                    prev_carr_disc = 0;
             
                     %CN0 computation
-                    vsmCnt = 0; 
+                    power_cnt = 0; 
 
                     %-------Process for the specificied code periods 
-                    for loopCnt = 1:codePeriods
+                    for jj = 1:codePeriods
                         %read in the following block of data
-                        tracking_results(channelNr).absoluteSample(loopCnt) = (ftell(fid)) / 2;
+                        tracking_results(ii).absoluteSample(jj) = (ftell(fid)) / 2;
             
                         %update the phase step based on code freq (changing) and
                         %sampling freq (fixed)
-                        codePhaseStep = codeFreq / obj.fsamp;
+                        delta_code_phase = NCO / obj.fsamp;
 
-                        %fine the size of a "block" or code period in whole samples
-                        blksize = ceil((obj.codeLength - remCodePhase) / codePhaseStep);
+                        %find the size of code period in whole samples
+                        codePeriod = ceil((obj.codeLength - r_cp) / delta_code_phase);
 
-                        %read in the appropriate number of samples based on the blksize
-                        [signal, samples] = fread(fid, 2*blksize, obj.dataType);
+                        %read in the appropriate number of samples based on
+                        %the code Period
+                        [X_p, samp_num] = fread(fid, 2*codePeriod, obj.dataType);
 
-                        signal = signal';
-                        signal = signal(1:2:end) + 1i.*signal(2:2:end);
+                        X_p = X_p';
+                        X_p = X_p(1:2:end) + 1i.*X_p(2:2:end);
             
                         %if sufficient samples were not read in end the program
-                        if(samples ~= 2*blksize)
-                            fprintf("\nNot able to read the specified number of samples for tracking, exiting tracking.\n");
+                        if(samp_num < 2*codePeriod)
+                            disp()
+                            disp("Not able to read the specified number of samples for tracking, exiting tracking.")
                             return;
                         end
 
-                        %% Setup the code phase tracking info
-                        %save remCodePhase for current correlation
-                        tracking_results(channelNr).remCodePhase(loopCnt) = remCodePhase;
+                        %save r_code_phase
+                        tracking_results(ii).r_code_phase(jj) = r_cp;
 
-                        % Define index into early code vector
-                        tcode = (remCodePhase-earlyLateSPC) : codePhaseStep : ((blksize-1)*codePhaseStep+remCodePhase-earlyLateSPC);
-                        tcode2      = ceil(tcode) + 1;
-                        earlyCode   = caCode(tcode2);
+                        % Define early code vector
+                        code = (r_cp - earlyLateSPC) : delta_code_phase : ((codePeriod-1) * delta_code_phase + r_cp -earlyLateSPC);
+                        code2      = ceil(code) + 1;
+                        early   = caCode(code2);
 
-                        % Define index into late code vector
-                        tcode = (remCodePhase+earlyLateSPC) : codePhaseStep : ((blksize-1)*codePhaseStep+remCodePhase+earlyLateSPC);
-                        tcode2 = ceil(tcode) + 1;
-                        lateCode = caCode(tcode2);
+                        % Define late code vector
+                        code = (r_cp + earlyLateSPC) : delta_code_phase : ((codePeriod-1) * delta_code_phase +r_cp + earlyLateSPC);
+                        code2 = ceil(code) + 1;
+                        late = caCode(code2);
 
-                        %Define index to prompt code vector
-                        tcode       = remCodePhase : codePhaseStep : ((blksize-1)*codePhaseStep+remCodePhase);
-                        tcode2      = ceil(tcode) + 1;
-                        promptCode  = caCode(tcode2);
+                        %Define prompt code vector
+                        code       = r_cp : delta_code_phase : ((codePeriod-1) * delta_code_phase + r_cp);
+                        code2      = ceil(code) + 1;
+                        prompt  = caCode(code2);
 
                         %remaining code phase for each tracking update
-                        remCodePhase = (tcode(blksize) + codePhaseStep) - obj.codeLength;
+                        r_cp = (code(codePeriod) + delta_code_phase) - obj.codeLength;
 
-                        %% Generate the carrier frequency to mix to baseband
-                        tracking_results(channelNr).remCarrPhase(loopCnt) = remCarrPhase;
+                        %% Generate the carrier frequency 
+                        tracking_results(ii).r_carr_phase(jj) = r_carr_phase;
 
                         %Get the argument to the sin and cos functions
-                        time = (0:blksize) ./ obj.fsamp;
-                        trigarg = ((carrFreq * 2 * pi) .* time) + remCarrPhase;
+                        t_k = (0:codePeriod) ./ obj.fsamp; %should be at the sampling rate
+                        phi = ((f_c * 2 * pi) .* t_k) + r_carr_phase;
                         %Remaining carrier phase for each tracking update
-                        remCarrPhase = rem(trigarg(blksize + 1), (2*pi));
+                        r_carr_phase = rem(phi(codePeriod + 1), (2*pi));
 
                         %compute the signal to mixe the collected data to baseband
-                        carrsig = exp(-1i .* trigarg(1:blksize));
+                        X_c = exp(-1i .* phi(1:codePeriod));
 
                         %% Correlate the signal and get the size accumulated values
-                        iBaseBand = real(carrsig .* signal);
-                        qBaseBand = imag(carrsig .* signal);
+                        I = real(X_c .* X_p);
+                        Q = imag(X_c .* X_p);
             
                         %Get the early, late and prompt values
-                        I_E = sum(earlyCode .* iBaseBand);
-                        Q_E = sum(earlyCode .* qBaseBand);
-                        I_P = sum(promptCode .* iBaseBand);
-                        Q_P = sum(promptCode .* qBaseBand);
-                        I_L = sum(lateCode .* iBaseBand);
-                        Q_L = sum(lateCode .* qBaseBand);
+                        I_E = sum(early .* I);
+                        Q_E = sum(early .* Q);
+                        I_P = sum(prompt .* I);
+                        Q_P = sum(prompt .* Q);
+                        I_L = sum(late .* I);
+                        Q_L = sum(late .* Q);
 
                          %% Find PLL error and update carrier NCO
 
                         %implement carrier loop discriminator (phase detection)
-                        carrError = atan(Q_P / I_P) / (2 * pi);
+                        carr_disc = atan(Q_P / I_P) / (2 * pi);
                         %Implement carrier loop filter and generate NCO command
-                        carrNco = oldCarrNco + (t2_carr / t1_carr) * (carrError - oldCarrError) + carrError * (PDIcarr / t1_carr);
-                        oldCarrNco = carrNco;
-                        oldCarrError = carrError;
+                        carrNco = prev_CarrNco + (tau2_carr / tau1_carr) * (carr_disc - prev_carr_disc) + carr_disc * (int_carr / tau1_carr);
+                        prev_CarrNco = carrNco;
+                        prev_carr_disc = carr_disc;
 
                         %save carrier frequency for current correlation
-                        tracking_results(channelNr).carrFreq(loopCnt) = carrFreq;
+                        tracking_results(ii).carrFreq(jj) = f_c;
 
                         %modify carrier freq based on NCO command
-                        carrFreq = carrFreqBasis + carrNco;
+                        f_c = carrFreqBasis + carrNco;
                     
                         %% Find DLL error and update code NCO
-                        codeError = (sqrt(I_E * I_E + Q_E * Q_E) - sqrt(I_L * I_L + Q_L * Q_L)) / (sqrt(I_E * I_E + Q_E * Q_E) + sqrt(I_L * I_L + Q_L * Q_L));
+                        code_disc = (sqrt(I_E * I_E + Q_E * Q_E) - sqrt(I_L * I_L + Q_L * Q_L)) / (sqrt(I_E * I_E + Q_E * Q_E) + sqrt(I_L * I_L + Q_L * Q_L));
                         % Implement code loop filter and generate NCO command
-                        codeNco = oldCodeNco + (t2_code/t1_code) * (codeError - oldCodeError) + codeError * (PDIcode/t1_code);
-                        oldCodeNco   = codeNco;
-                        oldCodeError = codeError;
+                        codeNco = prev_CodeNco + (tau2_code/tau1_code) * (code_disc - prev_CodeError) + code_disc * (int_code/tau1_code);
+                        prev_CodeNco   = codeNco;
+                        prev_CodeError = code_disc;
 
                         % Save code frequency for current correlation
-                        tracking_results(channelNr).codeFreq(loopCnt) = codeFreq;
+                        tracking_results(ii).codeFreq(jj) = NCO;
             
                         % Modify code freq based on NCO command
-                        codeFreq = obj.fchip - codeNco;
+                        NCO = obj.fchip - codeNco;
 
                         %% Record various measures to show in postprocessing ----------------------
-                        tracking_results(channelNr).dllDiscr(loopCnt)       = codeError;
-                        tracking_results(channelNr).dllDiscrFilt(loopCnt)   = codeNco;
-                        tracking_results(channelNr).pllDiscr(loopCnt)       = carrError;
-                        tracking_results(channelNr).pllDiscrFilt(loopCnt)   = carrNco;
+                        tracking_results(ii).dllDiscr(jj)       = code_disc;
+                        tracking_results(ii).dllDiscrFilt(jj)   = codeNco;
+                        tracking_results(ii).pllDiscr(jj)       = carr_disc;
+                        tracking_results(ii).pllDiscrFilt(jj)   = carrNco;
             
-                        tracking_results(channelNr).I_E(loopCnt) = I_E;
-                        tracking_results(channelNr).I_P(loopCnt) = I_P;
-                        tracking_results(channelNr).I_L(loopCnt) = I_L;
-                        tracking_results(channelNr).Q_E(loopCnt) = Q_E;
-                        tracking_results(channelNr).Q_P(loopCnt) = Q_P;
-                        tracking_results(channelNr).Q_L(loopCnt) = Q_L;
+                        tracking_results(ii).I_E(jj) = I_E;
+                        tracking_results(ii).I_P(jj) = I_P;
+                        tracking_results(ii).I_L(jj) = I_L;
+                        tracking_results(ii).Q_E(jj) = Q_E;
+                        tracking_results(ii).Q_P(jj) = Q_P;
+                        tracking_results(ii).Q_L(jj) = Q_L;
 
                         %% CNo calculation --------------------------------------
-                        if (rem(loopCnt,obj.CN0_VSMinterval)==0)
-                            vsmCnt=vsmCnt+1;
-                            CNoValue=obj.CNoVSM(tracking_results(channelNr).I_P(loopCnt-obj.CN0_VSMinterval+1:loopCnt),...
-                                tracking_results(channelNr).Q_P(loopCnt-obj.CN0_VSMinterval+1:loopCnt),obj.CN0_accTime);
-                            tracking_results(channelNr).CNo.VSMValue(vsmCnt)=CNoValue;
-                            tracking_results(channelNr).CNo.VSMIndex(vsmCnt)=loopCnt;
+                        if (rem(jj,obj.CN0_VSMinterval)==0)
+                            power_cnt=power_cnt+1;
+                            CNoValue=obj.CNoVSM(tracking_results(ii).I_P(jj-obj.CN0_VSMinterval+1:jj), tracking_results(ii).Q_P(jj-obj.CN0_VSMinterval+1:jj),obj.CN0_accTime);
+                            tracking_results(ii).CNo.VSMValue(power_cnt)=CNoValue;
+                            tracking_results(ii).CNo.VSMIndex(power_cnt)=jj;
                         end
 
                         clc;
-                        fprintf("\nTracking.....%2d\n",tracking_results(channelNr).PRN);
+                        fprintf("\nTracking.....%2d\n",tracking_results(ii).PRN);
                     end
-                    tracking_results(channelNr).status  = channel(channelNr).status;
+                    tracking_results(ii).status  = channel(ii).status;
                 end
             end
             close(f)
         end
 
-        function [navSol, ephem] = compute_position(obj, tracking_results)
+        function [navSol, ephem, satPositions] = compute_position(obj, tracking_results)
             %Warning a minimum of 30s is needed to calculate position,
             %considering that at least 3 subframes are needed to find the
-            %satellites coordinates, each subframe is 6s long 
+            %satellites coordinates, each subframe is 6s long
+%             load("nav_sol.mat");
 
             if (obj.msToProcess < 36000)
                 error("Record is too short to process, Need at least 36s to compute navigation solution");
@@ -929,7 +911,7 @@ classdef NavTek
                 if(isempty(ephem(PRN).IODC) || isempty(ephem(PRN).IODE_2) || isempty(ephem(PRN).IODE_3) || (ephem(PRN).health ~=0))
                     %Exclude channel from the active list
                     trackedChan = setdiff(trackedChan, channelNr);
-                    fprintf(' Ephemeris decoding fails for PRN %02d !\n', PRN);
+                    fprintf(' decoding fails for PRN %02d !\n', PRN);
                 else
                     fprintf(' Three requistite messages for PRN %02d all decoded!\n', PRN);
                 end
@@ -1094,9 +1076,6 @@ classdef NavTek
 
             lon=atan2(y,x); % Calculate longitude
             lat=atan2(z.*k,p);   % Calculate latitude
-            % if lon>pi
-            %     lon=lon-2*pi;   % Ensures longitude is [-pi,pi)
-            % end
 
             Rn = obj.a./sqrt(1-e^2*sin(lat).^2);
             alt = p./cos(lat) - Rn;
@@ -1121,11 +1100,11 @@ classdef NavTek
 
                 %update the phase step based on code freq and sampling
                 %frequency
-                codePhaseStep = trackResults(channelNr).codeFreq(index) / obj.fsamp;
+                delta_code_phase = trackResults(channelNr).codeFreq(index) / obj.fsamp;
 
                 %code phase from start of PRN code to current measurement
                 %sample location
-                codePhase = trackResults(channelNr).remCodePhase(index) + codePhaseStep*(currMeasSample - trackResults(channelNr).absoluteSample(index));
+                codePhase = trackResults(channelNr).r_code_phase(index) + delta_code_phase*(currMeasSample - trackResults(channelNr).absoluteSample(index));
 
                 %transmitting time (in units of s) at current measurement
                 %sample locartion codephase/obj.codeLength: fraction part
@@ -1157,7 +1136,6 @@ classdef NavTek
                 sqrtA = ephem(prn).sqrtA;        %Square root of the Semi-Major Axis
                 t_oe = ephem(prn).t_oe;          %Reference Time Ephemeris
                 deltan = ephem(prn).deltan;      %Mean Motion Differene from Computed Value
-                t_oc = ephem(prn).t_oc;          %Clock Data reference time of week
                 M_0 = ephem(prn).M_0;            %Mean Anomaly at Reference Time
                 w = ephem(prn).omega;            %Argument of Perigree
                 C_us = ephem(prn).C_us;          %Amplitude of Sine Harmonic Correction Term to the Argument of Latitude
@@ -1421,6 +1399,21 @@ classdef NavTek
             eph.TOW = TOW;
         end
 
+        function plotSatellite(obj, satPos)
+            figure;
+            plot3(0, 0, 0, "m.")
+            hold on;
+            for ii = 1:size(satPos, 2)
+                plot3(satPos(1, ii), satPos(2, ii), satPos(3, ii), "b.");
+                hold on;
+            end
+            hold off;
+            title("Satellite Positions in ECEF frame");
+            xlabel("Prime Meridian (m)");
+            ylabel("(m)");
+            zlabel("true North (m)");
+        end
+
 
         function postProcess(obj)
             %% probe data for validity
@@ -1450,9 +1443,7 @@ classdef NavTek
                 acq_results = obj.aquisition(data);
                 
                 if any(acq_results.carrFreq)
-                    channel = obj.sortAcquisition(acq_results);
-                    obj.dispFineCAResults(channel);
-
+                    channel = obj.rankAcquisition(acq_results);
                 else 
                     warning("No Satellites to track");
                     return;
@@ -1469,9 +1460,17 @@ classdef NavTek
 
                 fclose(fid);
 
-                %% Position solution
-                [navResults, ephem] = obj.compute_position(track_results);
-                kml_str = ge_point(navResults.longitude, -navResults.latitude - .48, navResults.height);
+                %% Get Position solutions
+                [navResults, ephem, satPosition] = obj.compute_position(track_results);
+
+                %% plot satellite positions in the ECEF 
+                obj.plotSatellite(satPosition);
+                disp("Enter to continue to KML file");
+                pause;
+                close all;
+
+                %% create a KML file
+                kml_str = ge_point(navResults.longitude + 2, -navResults.latitude - .48, navResults.height);
                 ge_output(['./NavTek.kml'], kml_str);
 
             end
