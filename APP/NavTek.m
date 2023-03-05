@@ -363,6 +363,7 @@ classdef NavTek
     methods
         function obj = NavTek()
             addpath("googleearth_matlab/googleearth/");
+            addpath("./kml-toolbox/");
             prompt = "Enter full IQ file path";
             disp(prompt);
             [file, path] = uigetfile("*.bin");
